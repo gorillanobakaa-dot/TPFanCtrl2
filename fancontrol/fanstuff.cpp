@@ -272,7 +272,10 @@ bool FANCONTROL::HandleData(void) {
 
 	sprintf_s(CurrentStatuscsv, sizeof(CurrentStatuscsv), "%s %s; %d; %d; ", templist, obuf2, State.FanCtrl, MaxTemp);
 
-	::SetDlgItemText(this->hwndDialog, 8112, this->CurrentStatus);
+	// a rewrite clears the selection, so the line could never be copied: hold it
+	// still while the user has clicked into it, and update again once they leave
+	if (::GetFocus() != ::GetDlgItem(this->hwndDialog, 8112))
+		::SetDlgItemText(this->hwndDialog, 8112, this->CurrentStatus);
 
 	//
 	// handle fan control according to mode

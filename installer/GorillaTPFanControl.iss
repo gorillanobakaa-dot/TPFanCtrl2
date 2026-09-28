@@ -20,7 +20,7 @@
 ; ===========================================================================
 
 #define AppName      "Gorilla TPFanControl"
-#define AppVersion   "2.5.1-gorilla.2"
+#define AppVersion   "2.5.1-gorilla.3"
 #define AppPublisher "Gorilla Fan Control (fork of mews-se/TPFanCtrl2)"
 #define AppUrl       "https://github.com/gorillanobakaa-dot/TPFanCtrl2"
 #define TaskName     "Gorilla TPFanControl"

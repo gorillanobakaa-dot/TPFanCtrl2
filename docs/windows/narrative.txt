@@ -109,3 +109,18 @@ Not tested
 - The portable zip on a second computer.
 - Opening the window rewrites the same values into the ini once (the
   client's first command); harmless, not fixed.
+
+2.5.1-gorilla.3 (2026-09-28, evening)
+-------------------------------------
+- The Status line at the bottom of the window could not be copied: the
+  window rewrote it every cycle, and each rewrite cleared the selection.
+  The Log box, which is only appended to, could be copied. Fix
+  (fanstuff.cpp): the Status line is not rewritten while it has the
+  keyboard focus; updates resume when the focus leaves it.
+- Tested on the installed program with TEST-StatusCopy-v1.ps1 (Win32
+  messages and focus through AttachThreadInput; no screenshots): with the
+  focus elsewhere a marker was overwritten within one cycle; with the focus
+  in the Status line it stayed for three cycles, fully selected, and WM_COPY
+  put it on the clipboard; with the focus back elsewhere updates resumed.
+  9 of 9 checks passed. Upgrade from gorilla.2 kept the settings
+  (Active=3, ManFanSpeed=3); the service was restarted, not recreated.

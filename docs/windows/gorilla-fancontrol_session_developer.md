@@ -1,4 +1,4 @@
-# Gorilla TPFanControl 2.5.1-gorilla.1 and gorilla.2: window, persistence, Gorilla mode, level labels, Windows service installer
+# Gorilla TPFanControl 2.5.1-gorilla.1, gorilla.2 and gorilla.3: window, persistence, Gorilla mode, level labels, Windows service installer
 
 > Session record generated 2026-09-28
 
@@ -37,6 +37,7 @@ Considered and not taken: a full rewrite of the Windows program (the owner asked
 | `installer/GorillaTPFanControl.iss` | added | ThinkPad and Windows checks, PawnIO 2.2.0 bundled with a version check, service install (`-i -q`) or restart (`sc start`) decided once in PrepareToInstall, old task removal, uninstall with `-u -q` | One self-contained Setup.exe; control from boot |
 | `installer/build-portable.ps1 and installer/portable/*` | added | Portable zip with the same files and two launchers | A no-install option |
 | `README.md, installer/README-FIRST.txt, installer/portable/README-PORTABLE.txt` | modified | Fork section, service, Gorilla mode, percentages | Document the behaviour users see |
+| `fancontrol/fanstuff.cpp (gorilla.3)` | modified | `SetDlgItemText(8112, ...)` skipped while `GetFocus()` is the Status edit control | Each rewrite cleared the selection, so the Status line could never be copied |
 
 ## Decisions Made
 
@@ -107,6 +108,13 @@ Uninstall with `unins000.exe /VERYSILENT` and query `sc.exe query TPFanControl`
   - **Pass:** Exit 1060 (no such service); `TPFanControl.ini` kept; PawnIO still in Installed apps
   - **Fail:** The service still listed, or the ini deleted
 
+**Step 6:**
+```bash
+Run `TEST-StatusCopy-v1.ps1` against the running window (focus set with `AttachThreadInput` + `SetFocus`, text through `WM_GETTEXT`/`WM_SETTEXT`, copy through `WM_COPY`)
+```
+  - **Pass:** `RESULT: all passed` (9 checks): marker overwritten without focus, kept and copyable with focus, updates resume after
+  - **Fail:** `text held still` fails: the Status line is still rewritten while focused
+
 
 ## Glossary
 
@@ -137,6 +145,7 @@ Uninstall with `unins000.exe /VERYSILENT` and query `sc.exe query TPFanControl`
 | The start-up command is harmless | 🤖 model inference | *(none — model judgment)* |
 | Other models are the main untested risk | 🤖 model inference | *(none — model judgment)* |
 | Sending -1 for unchanged Gorilla fields would work with the current engine | 🤖 model inference | *(none — model judgment)* |
+| The Status line can now be copied | 📄 stated in input | WM_COPY put it on the clipboard |
 
 
 ---

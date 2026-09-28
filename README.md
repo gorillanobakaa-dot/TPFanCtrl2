@@ -47,6 +47,9 @@ these are the choices that exist.*
 - **A normal title bar.** Minimise goes to the taskbar; close hides to the
   tray while the fan control keeps running. The minimise button lights up
   bright blue on hover (`CaptionHoverColor=RRGGBB` in the ini).
+- **A Status line you can copy.** The line at the bottom of the window stays
+  still while you have clicked into it, so it can be selected and copied; it
+  updates again when you click elsewhere.
 - **A manual level that survives a restart.** A mode or level picked by
   hand is written back to `TPFanControl.ini`. The automatic revert to Smart
   at `ManModeExit` is not saved.

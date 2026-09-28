@@ -56,6 +56,11 @@ The worst case is on a ThinkPad model that was not tested, where the fan chip co
 - After:  The installer sets it up as a Windows service that starts with the computer, before anyone signs in, with no prompt. The window opens at every sign-in without administrator rights.
 - Affects: everyone who uses the installer
 
+**Copying the Status line (gorilla.3)**
+- Before: You could not select or copy the line at the bottom of the window: it was rewritten every few seconds, which cleared your selection.
+- After:  Click into the line and it stays still, so you can select and copy it. It starts updating again when you click elsewhere.
+- Affects: everyone
+
 ## What you can do now
 
 - Install everything, including the PawnIO driver, with one `Setup.exe` and no internet connection.
@@ -65,6 +70,7 @@ The worst case is on a ThinkPad model that was not tested, where the fan chip co
 - Pick a manual level and find it still set after a restart.
 - Minimise the window to the taskbar, or close it to the notification area while the fan control keeps running.
 - Uninstall it from Settings > Apps and have the fan handed back to the BIOS.
+- Copy the Status line at the bottom of the window: click into it, select, and copy.
 
 ## What is still missing
 
@@ -134,6 +140,7 @@ Only if you run it on a ThinkPad model other than the L15 Gen 3. The fan logic f
 | Other ThinkPad models are the main risk | 🤖 model inference | *(none — model judgment)* |
 | The firmware's own overheating protection remains in place | 🤖 model inference | *(none — model judgment)* |
 | Opening the window rewrites the settings once and does no harm | 📄 stated in input | Opening the window rewrites the same values into the ini once |
+| The Status line can now be copied | 📄 stated in input | it stayed for three cycles, fully selected, and WM_COPY put it on the clipboard |
 
 
 ---
