@@ -223,10 +223,17 @@ void FANCONTROL::InitDialogWindow() {
 				LVCOLUMNA lvc = {0};
 				lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
 				lvc.fmt = LVCFMT_LEFT;
-				lvc.cx = 28; lvc.pszText = (LPSTR)"#"; ListView_InsertColumn(hLV, 0, &lvc);
-				lvc.cx = 48; lvc.pszText = (LPSTR)"Name"; ListView_InsertColumn(hLV, 1, &lvc);
-				lvc.cx = 50; lvc.pszText = (LPSTR)"Temp"; ListView_InsertColumn(hLV, 2, &lvc);
-				lvc.cx = 42; lvc.pszText = (LPSTR)"EC"; ListView_InsertColumn(hLV, 3, &lvc);
+				// Column widths share out the list's real width (Gorilla fork):
+				// fixed pixel widths were wider than the 70-unit box, and did not
+				// grow with display scaling, so text was cut off at 125-150 %.
+				RECT rc; ::GetClientRect(hLV, &rc);
+				int cw = rc.right - rc.left;
+				if (cw < 120) cw = 168;               // not laid out yet: old total
+				int w0 = cw * 14 / 100, w1 = cw * 30 / 100, w2 = cw * 30 / 100;
+				lvc.cx = w0; lvc.pszText = (LPSTR)"#"; ListView_InsertColumn(hLV, 0, &lvc);
+				lvc.cx = w1; lvc.pszText = (LPSTR)"Name"; ListView_InsertColumn(hLV, 1, &lvc);
+				lvc.cx = w2; lvc.pszText = (LPSTR)"Temp"; ListView_InsertColumn(hLV, 2, &lvc);
+				lvc.cx = cw - w0 - w1 - w2; lvc.pszText = (LPSTR)"EC"; ListView_InsertColumn(hLV, 3, &lvc);
 			}
 		}
 
@@ -399,7 +406,7 @@ void FANCONTROL::SetupTaskbarAndTimers() {
 		m_renewTimer = ::SetTimer(this->hwndDialog, 4, this->ReIcCycle * 1000, NULL); // Vista icon update
 
 	if (this->StartMinimized)
-		::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+		::ShowWindow(this->hwndDialog, this->MinimizeToSysTray ? SW_HIDE : SW_MINIMIZE);
 	else
 		::ShowWindow(this->hwndDialog, TRUE);
 }
@@ -738,7 +745,8 @@ ULONG FANCONTROL::DlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2) {
 		return OnCommand(mp1);
 
 	case WM_CLOSE:
-		::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+		// close = hide to the tray; fan control keeps running (Exit is in the tray menu)
+		::ShowWindow(this->hwndDialog, this->MinimizeToSysTray ? SW_HIDE : SW_MINIMIZE);
 		return TRUE;
 
 	case WM_POWERBROADCAST:
@@ -748,8 +756,8 @@ ULONG FANCONTROL::DlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2) {
 		return OnEndSession();
 
 	case WM_SIZE:
-		if (mp1 == SIZE_MINIMIZED && this->MinimizeToSysTray)
-			::ShowWindow(this->hwndDialog, FALSE);
+		// minimise now goes to the taskbar like any window; hiding to the tray
+		// is what close, the tray icon and "Hide window" do (Gorilla fork)
 		return TRUE;
 
 	case WM_DESTROY:
@@ -837,6 +845,13 @@ ULONG FANCONTROL::OnHotKey(WPARAM mp1) {
 	case 9: // Toggle Smart Mode 1 <-> 2
 		SwitchSmartLevel(this->IndSmartLevel == 0 ? 1 : 0);
 		break;
+	}
+
+	// hotkeys 1-3 and the toggles 6-8 are a user's choice of mode: remember it
+	if (!g_clientMode && ((mp1 >= 1 && mp1 <= 3) || (mp1 >= 6 && mp1 <= 8))) {
+		char level[64] = "";
+		::GetWindowTextA(::GetDlgItem(this->hwndDialog, 8310), level, sizeof(level));
+		this->PersistUserMode(this->CurrentModeFromDialog(), level);
 	}
 
 	return 0;
@@ -1110,22 +1125,34 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 	}
 
 	if (cmd >= 8300 && cmd <= 8302 || cmd == 8310) {  // radio button or manual speed entry
+		char level[64] = "";
 		if (cmd == 8310) {  // auto-switch to Manual when user interacts with speed ComboBox
 			if (HIWORD(mp1) == CBN_EDITCHANGE)  // ignore per-keystroke, only act on CBN_SELCHANGE
 				return 0;
 			this->ModeToDialog(3);
+			// On CBN_SELCHANGE the edit text is not updated yet: read the picked item.
+			HWND hCB = ::GetDlgItem(this->hwndDialog, 8310);
+			LRESULT sel = hCB ? ::SendMessageA(hCB, CB_GETCURSEL, 0, 0) : CB_ERR;
+			if (sel != CB_ERR && ::SendMessageA(hCB, CB_GETLBTEXTLEN, sel, 0) < (LRESULT)sizeof(level))
+				::SendMessageA(hCB, CB_GETLBTEXT, sel, (LPARAM)level);
 		}
+		if (!level[0])
+			::GetWindowTextA(::GetDlgItem(this->hwndDialog, 8310), level, sizeof(level));
+		if (!g_clientMode && HIWORD(mp1) != EN_CHANGE)
+			this->PersistUserMode(this->CurrentModeFromDialog(), level);
 		::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 	}
 	else {
 		switch (cmd) {
 		case 5001: // bios
 			this->ModeToDialog(1);
+			if (!g_clientMode) this->PersistUserMode(1, NULL);
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 
 		case 5002: // smart
 			this->ModeToDialog(2);
+			if (!g_clientMode) this->PersistUserMode(2, NULL);
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 
@@ -1139,6 +1166,11 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 
 		case 5005: // manual
 			this->ModeToDialog(3);
+			if (!g_clientMode) {
+				char level[64] = "";
+				::GetWindowTextA(::GetDlgItem(this->hwndDialog, 8310), level, sizeof(level));
+				this->PersistUserMode(3, level);
+			}
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 
@@ -1167,7 +1199,7 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 			break;
 
 		case 5030: // hide window
-			::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+			::ShowWindow(this->hwndDialog, this->MinimizeToSysTray ? SW_HIDE : SW_MINIMIZE);
 			break;
 
 		case 5050: // start with windows toggle
@@ -1350,12 +1382,12 @@ ULONG FANCONTROL::OnNewData(WPARAM mp1) {
 ULONG FANCONTROL::OnTaskbarNotify(LPARAM mp2) {
 	switch (mp2) {
 	case WM_LBUTTONDOWN:
-		if (!IsWindowVisible(this->hwndDialog)) {
-			::ShowWindow(this->hwndDialog, TRUE);
+		if (!IsWindowVisible(this->hwndDialog) || IsIconic(this->hwndDialog)) {
+			::ShowWindow(this->hwndDialog, IsIconic(this->hwndDialog) ? SW_RESTORE : SW_SHOW);
 			::SetForegroundWindow(this->hwndDialog);
 		}
 		else
-			::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+			::ShowWindow(this->hwndDialog, this->MinimizeToSysTray ? SW_HIDE : SW_MINIMIZE);
 		break;
 
 	case WM_LBUTTONUP:
@@ -1370,12 +1402,12 @@ ULONG FANCONTROL::OnTaskbarNotify(LPARAM mp2) {
 	break;
 
 	case WM_LBUTTONDBLCLK:
-		if (!IsWindowVisible(this->hwndDialog)) {
-			::ShowWindow(this->hwndDialog, TRUE);
+		if (!IsWindowVisible(this->hwndDialog) || IsIconic(this->hwndDialog)) {
+			::ShowWindow(this->hwndDialog, IsIconic(this->hwndDialog) ? SW_RESTORE : SW_SHOW);
 			::SetForegroundWindow(this->hwndDialog);
 		}
 		else
-			::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+			::ShowWindow(this->hwndDialog, this->MinimizeToSysTray ? SW_HIDE : SW_MINIMIZE);
 		break;
 
 	case WM_RBUTTONDOWN: {
@@ -1664,6 +1696,10 @@ FANCONTROL::UpdateTempDisplay(void)
 	HWND hLV = ::GetDlgItem(this->hwndDialog, 8101);
 	if (!hLV) return;
 
+	// Rebuilt every cycle: freeze painting and keep the scroll position, so the
+	// list neither flickers nor jumps back to the top (Gorilla fork).
+	int topIndex = ListView_GetTopIndex(hLV);
+	::SendMessage(hLV, WM_SETREDRAW, FALSE, 0);
 	ListView_DeleteAllItems(hLV);
 
 	LVITEMA lvi = {0};
@@ -1701,6 +1737,15 @@ FANCONTROL::UpdateTempDisplay(void)
 			ListView_SetItemText(hLV, idx, 3, buf);
 		}
 	}
+
+	int count = ListView_GetItemCount(hLV);
+	if (topIndex > 0 && count > 0)
+	{
+		int last = topIndex + ListView_GetCountPerPage(hLV) - 1;
+		ListView_EnsureVisible(hLV, last < count - 1 ? last : count - 1, FALSE);
+	}
+	::SendMessage(hLV, WM_SETREDRAW, TRUE, 0);
+	::InvalidateRect(hLV, NULL, FALSE);
 
 	this->icontemp = this->State.Sensors[this->iMaxTemp];
 

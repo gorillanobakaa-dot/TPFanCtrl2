@@ -282,6 +282,10 @@ protected:
 	// misc.cpp
 
 	int ReadConfig(const char* filename);
+	// Save a mode/level the user picked by hand (window, tray menu, hotkey or
+	// client) as Active= and ManFanSpeed=, so it is used again after a restart.
+	// Never called for the automatic 78 C revert to Smart.
+	void PersistUserMode(int mode, const char* levelText);
 
 	void Tracecsv(const char* textcsv);
 

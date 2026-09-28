@@ -945,3 +945,85 @@ FANCONTROL::CreateThread(int(_stdcall* fnct)(ULONG), ULONG p) {
 	hThread = ::CreateThread(NULL, 8 * 4096, thread, (void*)p, 0, &tid);
 	return hThread;
 }
+
+//-------------------------------------------------------------------------
+//  remember a mode the user chose by hand (Gorilla fork, 2026-09-28)
+//
+//  Upstream reads Active= and ManFanSpeed= at start-up but never writes them,
+//  so a Manual level set in the window was lost at every restart. This
+//  rewrites just those two lines of TPFanControl.ini (the working directory
+//  is the exe folder, set in approot.cpp), keeping every other line, comment
+//  and line ending byte for byte. Written to a temp file first, then moved
+//  over the original, so a crash can never leave a half-written config.
+//-------------------------------------------------------------------------
+static int ParseManualLevel(const char* text)
+{
+	if (!text || !text[0]) return -1;
+	if (text[0] == 'x' && text[1] == '\'') return (int)strtol(text + 2, NULL, 16);
+	if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) return (int)strtol(text, NULL, 16);
+	char* end = NULL;
+	long v = strtol(text, &end, 0);
+	return (end == text) ? -1 : (int)v;
+}
+
+void
+FANCONTROL::PersistUserMode(int mode, const char* levelText)
+{
+	if (mode < 1 || mode > 3) return;                // never write Active=0 (read-only)
+	int level = (mode == 3) ? ParseManualLevel(levelText) : -1;
+	if (mode == 3 && (level < 0 || level > 255)) return;   // unparsable level: keep the file as is
+
+	const char* path = "TPFanControl.ini";
+	FILE* f = NULL;
+	if (fopen_s(&f, path, "rb") || !f) { this->Trace("Could not open TPFanControl.ini to save the mode"); return; }
+	std::string in, line;
+	char chunk[4096];
+	size_t n;
+	while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) in.append(chunk, n);
+	fclose(f);
+
+	std::string out;
+	bool doneActive = false, doneSpeed = false;
+	size_t pos = 0;
+	while (pos < in.size()) {
+		size_t nl = in.find('\n', pos);
+		size_t end = (nl == std::string::npos) ? in.size() : nl + 1;
+		line.assign(in, pos, end - pos);
+		pos = end;
+		std::string eol = (line.size() >= 2 && line.compare(line.size() - 2, 2, "\r\n") == 0) ? "\r\n"
+			: (!line.empty() && line.back() == '\n') ? "\n" : "";
+		bool comment = !line.empty() && (line[0] == '/' || line[0] == '#' || line[0] == ';');
+		if (!comment && !doneActive && _strnicmp(line.c_str(), "Active=", 7) == 0) {
+			line = "Active=" + std::to_string(mode) + eol;
+			doneActive = true;
+		}
+		else if (!comment && !doneSpeed && level >= 0 && _strnicmp(line.c_str(), "ManFanSpeed=", 12) == 0) {
+			line = "ManFanSpeed=" + std::to_string(level) + eol;
+			doneSpeed = true;
+		}
+		out += line;
+	}
+	std::string eolDefault = (in.find("\r\n") != std::string::npos) ? "\r\n" : "\n";
+	if (!out.empty() && out.back() != '\n') out += eolDefault;
+	if (!doneActive) out += "Active=" + std::to_string(mode) + eolDefault;
+	if (!doneSpeed && level >= 0) out += "ManFanSpeed=" + std::to_string(level) + eolDefault;
+
+	if (out == in) return;                              // nothing changed: no write
+
+	const char* tmp = "TPFanControl.ini.saving";
+	if (fopen_s(&f, tmp, "wb") || !f) { this->Trace("Could not write TPFanControl.ini.saving"); return; }
+	size_t written = fwrite(out.data(), 1, out.size(), f);
+	int closed = fclose(f);
+	if (written != out.size() || closed != 0 || !::MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		::DeleteFileA(tmp);
+		this->Trace("Could not save the chosen mode to TPFanControl.ini");
+		return;
+	}
+
+	char msg[128];
+	if (mode == 3)
+		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: Manual, level %d (used again after a restart)", level);
+	else
+		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: %s (used again after a restart)", mode == 1 ? "BIOS" : "Smart");
+	this->Trace(msg);
+}

@@ -295,6 +295,8 @@ bool FANCONTROL::HandleData(void) {
 			if (shared->cmdMode == 3 && shared->cmdLevelText[0])
 				::SetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText);
 			this->ModeToDialog(shared->cmdMode);
+			// the engine owns the config file: remember the client's choice here
+			this->PersistUserMode(shared->cmdMode, shared->cmdLevelText);
 		}
 	}
 
