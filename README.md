@@ -2,6 +2,32 @@
 
 Fan control for ThinkPads running Windows 10/11.
 
+## This fork: Gorilla TPFanControl
+
+A fork of [mews-se/TPFanCtrl2](https://github.com/mews-se/TPFanCtrl2) that
+changes the window and the packaging. **The fan logic is unchanged.**
+
+- **A readable temperature list.** The list was smaller than its own
+  columns, so it scrolled both ways and showed about half the sensors. It
+  now shows every sensor and all four columns, and the columns scale with
+  display scaling. It no longer flickers or jumps back to the top.
+- **A normal title bar.** Minimise goes to the taskbar; close hides to the
+  tray while the fan control keeps running. The minimise button lights up
+  bright blue on hover (`CaptionHoverColor=RRGGBB` in the ini).
+- **A manual level that survives a restart.** A mode or level picked by
+  hand is written back to `TPFanControl.ini`. The automatic revert to Smart
+  at `ManModeExit` is not saved.
+- **A safer default.** `ManFanSpeed=4` instead of `0`, which switched the
+  fan off when Manual was clicked.
+- **An installer and a portable zip**, with the PawnIO driver bundled. The
+  installer refuses anything that is not a Lenovo ThinkPad on 64-bit
+  Intel/AMD Windows 10 (1809 or newer) or 11, sets up start at sign-in
+  without a prompt, and on uninstall hands the fan back to the BIOS.
+
+Downloads are under [Releases](../../releases). Build the installer with
+Inno Setup 6: `ISCC installer\GorillaTPFanControl.iss`; the portable zip
+with `installer\build-portable.ps1`.
+
 This repository carries on FanDjango's TPFanCtrl2 line, which was archived
 in August 2026. The full history is preserved here — every branch and tag,
 and the release binaries from V2.3.4 through V2.3.23 mirrored under
