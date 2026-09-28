@@ -290,13 +290,27 @@ bool FANCONTROL::HandleData(void) {
 
 		if (shared->cmdSmart == 0 || shared->cmdSmart == 1)
 			this->SwitchSmartLevel(shared->cmdSmart);
-		else if (shared->cmdMode >= 1 && shared->cmdMode <= 3) {
+		else if (shared->cmdMode >= 1 && shared->cmdMode <= 4) {
 			// an empty box would parse as level 0, the fan off
-			if (shared->cmdMode == 3 && shared->cmdLevelText[0])
-				::SetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText);
+			if (shared->cmdMode == 3 && shared->cmdLevelText[0]) {
+				char* end = NULL;
+				long lv = strtol(shared->cmdLevelText, &end, 0);
+				if (end != shared->cmdLevelText)
+					this->SelectLevelInCombo(8310, (int)lv);
+				else
+					::SetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText);
+			}
+			// Gorilla settings travel with every command (-1 = unchanged)
+			if (shared->cmdGorillaTarget >= 30 && shared->cmdGorillaTarget <= 70)
+				this->GorillaTarget = shared->cmdGorillaTarget;
+			if ((shared->cmdGorillaFloor >= 1 && shared->cmdGorillaFloor <= 7) || shared->cmdGorillaFloor == 64)
+				this->GorillaFloor = shared->cmdGorillaFloor;
+			this->GorillaToDialog();
 			this->ModeToDialog(shared->cmdMode);
 			// the engine owns the config file: remember the client's choice here
 			this->PersistUserMode(shared->cmdMode, shared->cmdLevelText);
+			if (shared->cmdMode == 4)
+				this->PersistGorilla(this->GorillaTarget, this->GorillaFloor);
 		}
 	}
 
@@ -306,6 +320,8 @@ bool FANCONTROL::HandleData(void) {
 		shared->ackSeq = this->LastCmdSeq;
 		shared->mode = this->CurrentMode;
 		shared->smartLevel = this->IndSmartLevel;
+		shared->gorillaTarget = this->GorillaTarget;
+		shared->gorillaFloor = this->GorillaFloor;
 		shared->fanCtrl = (unsigned char)this->State.FanCtrl;
 		shared->fan1lo = (unsigned char)this->State.Fan1SpeedLo;
 		shared->fan1hi = (unsigned char)this->State.Fan1SpeedHi;
@@ -328,6 +344,8 @@ bool FANCONTROL::HandleData(void) {
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Smart->");
 			if (this->PreviousMode == 3)
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Manual->");
+			if (this->PreviousMode == 4)
+				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Gorilla->");
 
 			if (this->CurrentMode == 1)
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "BIOS, setting fan speed");
@@ -357,6 +375,8 @@ bool FANCONTROL::HandleData(void) {
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Smart->");
 			if (this->PreviousMode == 3)
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Manual->");
+			if (this->PreviousMode == 4)
+				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Gorilla->");
 
 			if (this->CurrentMode == 1)
 				sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "BIOS, setting fan speed");
@@ -396,6 +416,18 @@ bool FANCONTROL::HandleData(void) {
 		}
 
 		break;
+
+	case 4: // Gorilla (Gorilla fork)
+		if (this->PreviousMode != this->CurrentMode) {
+			static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla" };
+			int pm = (this->PreviousMode >= 1 && this->PreviousMode <= 4) ? this->PreviousMode : 0;
+			sprintf_s(obuf, sizeof(obuf), "Change Mode from %s->Gorilla: keep the CPU at %d C, never below level %s",
+				names[pm], this->GorillaTarget, this->GorillaFloor == 64 ? "full" : std::to_string(this->GorillaFloor).c_str());
+			this->Trace(obuf);
+		}
+		this->GorillaControl();
+		ok = true;
+		break;
 	}
 
 	this->PreviousMode = this->CurrentMode;
@@ -404,6 +436,54 @@ bool FANCONTROL::HandleData(void) {
 		this->CurrentMode = 2;
 
 	return ok;
+}
+
+//-------------------------------------------------------------------------
+//  Gorilla mode (Gorilla fork): cooling first, noise ignored
+//
+//  Steers by the CPU sensor (sensor 1, "cpu"), not the hottest sensor: on
+//  some ThinkPads a sensor reads a fixed value regardless of the fan (the L15
+//  Gen 3's "pwr" reads 66 C even at full speed while the CPU is at 45-50), and
+//  steering by it would pin the fan without cooling anything. If the CPU
+//  sensor does not read, the hottest sensor is used instead.
+//
+//    CPU >= target            full speed (0x40)
+//    CPU >= target - 5        level 7
+//    otherwise                GorillaFloor (never lower)
+//    any sensor > ManModeExit full speed, whatever the settings
+//
+//  Steps down only 2 C below the threshold that raised the fan, so it does
+//  not hunt. Full speed uses the same staircase as Smart and Manual.
+//-------------------------------------------------------------------------
+void FANCONTROL::GorillaControl(void) {
+	int cpu = this->State.Sensors[0];
+	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
+	int target = this->GorillaTarget;
+	int floor = this->GorillaFloor;
+	int cur = this->State.FanCtrl;
+	bool hot = this->MaxTemp > this->ManModeExitInternal;
+
+	int want;
+	if (t >= target || hot)       want = 64;
+	else if (t >= target - 5)     want = 7;
+	else                          want = floor;
+
+	if (!hot) {
+		if (want != 64 && cur == 64 && t > target - 2)
+			want = 64;                                  // hold full speed until 2 C below target
+		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && t > target - 7)
+			want = 7;                                   // hold level 7 until 2 C below its band
+	}
+	if (floor == 64)
+		want = 64;
+	else if (want != 64 && want < floor)
+		want = floor;
+
+	if (want == 64 && cur != 64 && this->fan1speed < 4000)
+		want = 7;                                       // spin up regulated first (as Smart)
+
+	if (want != cur)
+		this->SetFan("Gorilla", want);
 }
 
 //-------------------------------------------------------------------------
@@ -417,6 +497,13 @@ void FANCONTROL::SmartControl(void) {
 		sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Change Mode from BIOS->");
 		sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Smart, recalculate fan speed");
 		this->Trace(obuf);
+	}
+
+	if (this->PreviousMode == 4) {
+		sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Change Mode from Gorilla->");
+		sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Smart, recalculate fan speed");
+		this->Trace(obuf);
+		obuf[0] = 0;
 	}
 
 	if (this->PreviousMode == 3) {
@@ -434,7 +521,7 @@ void FANCONTROL::SmartControl(void) {
 	//5 Level = 95   64  0   0 
 	//6 Level = 105 128  0   0 
 
-	if ((fanctrl > 7 && (fanctrl != 64 || !Lev64Norm)) || this->PreviousMode == 3 || this->PreviousMode == 1) {
+	if ((fanctrl > 7 && (fanctrl != 64 || !Lev64Norm)) || this->PreviousMode == 3 || this->PreviousMode == 1 || this->PreviousMode == 4) {
 		fanctrl = 0;
 		levelIndex = 0;
 		newfanctrl = 0;

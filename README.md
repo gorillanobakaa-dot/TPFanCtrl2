@@ -5,8 +5,29 @@ Fan control for ThinkPads running Windows 10/11.
 ## This fork: Gorilla TPFanControl
 
 A fork of [mews-se/TPFanCtrl2](https://github.com/mews-se/TPFanCtrl2) that
-changes the window and the packaging. **The fan logic is unchanged.**
+changes the window and the packaging, and adds one mode. **BIOS, Smart and
+Manual work exactly as upstream.**
 
+- **Gorilla mode (cooling first).** A fourth mode for people who want the
+  laptop cool and do not mind the noise. You pick a CPU temperature to keep
+  (40, 45 or 50 C) and a minimum speed. At the target and above the fan runs
+  at full speed, within 5 C below it at level 7, and otherwise at the
+  minimum; it never goes slower than the minimum. It steers by the CPU
+  sensor, not the hottest sensor, because some ThinkPads report a sensor
+  that sits at a fixed value whatever the fan does. Above `ManModeExit`
+  (78 C by default) it runs at full speed whatever the settings. Settings:
+  `Active=4`, `GorillaTarget=`, `GorillaFloor=`.
+- **Levels shown as % and rpm.** The ThinkPad fan chip only takes levels
+  0-7 and "full speed", so there is no free percentage setting. Instead,
+  if you measure your fan once and put the 9 numbers in `FanLevelRpm=`,
+  the level lists show each level as a percentage of full speed with its
+  rpm, e.g. `4  81 %  level 4, 2790 rpm`. Without them the lists show plain
+  levels. The numbers are only labels; they never change what is sent.
+- **Runs as a Windows service.** The installer now sets the fan control up
+  as upstream's `TPFanControl` service: it starts at boot as SYSTEM, before
+  anyone signs in, and needs no prompt. The window is a remote control for
+  it, runs without administrator rights, and starts at every sign-in.
+  Upgrading from gorilla.1 replaces its sign-in task with the service.
 - **A readable temperature list.** The list was smaller than its own
   columns, so it scrolled both ways and showed about half the sensors. It
   now shows every sensor and all four columns, and the columns scale with
@@ -21,8 +42,8 @@ changes the window and the packaging. **The fan logic is unchanged.**
   fan off when Manual was clicked.
 - **An installer and a portable zip**, with the PawnIO driver bundled. The
   installer refuses anything that is not a Lenovo ThinkPad on 64-bit
-  Intel/AMD Windows 10 (1809 or newer) or 11, sets up start at sign-in
-  without a prompt, and on uninstall hands the fan back to the BIOS.
+  Intel/AMD Windows 10 (1809 or newer) or 11, installs the service, and
+  on uninstall hands the fan back to the BIOS.
 
 Downloads are under [Releases](../../releases). Build the installer with
 Inno Setup 6: `ISCC installer\GorillaTPFanControl.iss`; the portable zip

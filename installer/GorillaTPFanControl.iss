@@ -20,7 +20,7 @@
 ; ===========================================================================
 
 #define AppName      "Gorilla TPFanControl"
-#define AppVersion   "2.5.1-gorilla.1"
+#define AppVersion   "2.5.1-gorilla.2"
 #define AppPublisher "Gorilla Fan Control (fork of mews-se/TPFanCtrl2)"
 #define AppUrl       "https://github.com/gorillanobakaa-dot/TPFanCtrl2"
 #define TaskName     "Gorilla TPFanControl"
@@ -71,25 +71,38 @@ Source: "..\fancontrol\TPFanControl.ini";         DestDir: "{app}"; Flags: onlyi
 Source: "thirdparty\PawnIO\PawnIO_setup.exe";     DestDir: "{tmp}"; Flags: deleteafterinstall; Check: PawnIONeeded
 
 [Icons]
-; Starts it if it was exited. While it runs, its window opens from the tray icon
-; (the task ignores a second start, so this cannot open the window itself).
-Name: "{group}\Start Gorilla TPFanControl"; Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""{#TaskName}"""; IconFilename: "{app}\TPFanControl.exe"
+; The fan control itself is the TPFanControl Windows service: it runs from boot
+; as SYSTEM, before anyone signs in. The window is a remote control for it and
+; needs no administrator rights; it starts at every sign-in for every user.
+Name: "{group}\Gorilla TPFanControl (window)"; Filename: "{app}\TPFanControl.exe"; WorkingDir: "{app}"
+Name: "{commonstartup}\Gorilla TPFanControl (window)"; Filename: "{app}\TPFanControl.exe"; WorkingDir: "{app}"
 Name: "{group}\Settings file (TPFanControl.ini)"; Filename: "{app}\TPFanControl.ini"
 Name: "{group}\Uninstall Gorilla TPFanControl"; Filename: "{uninstallexe}"
 
 [Run]
 ; 1. the driver, silently (switches from winget's manifest for PawnIO 2.2.0)
 Filename: "{tmp}\PawnIO_setup.exe"; Parameters: "-install -silent"; StatusMsg: "Installing the PawnIO driver..."; Flags: waituntilterminated; Check: PawnIONeeded; AfterInstall: CheckPawnIOResult
-; 2. start at sign-in with admin rights and no prompt, via a scheduled task
-Filename: "{sys}\schtasks.exe"; Parameters: "/create /tn ""{#TaskName}"" /xml ""{tmp}\task.xml"" /f"; StatusMsg: "Setting up start at sign-in..."; Flags: runhidden waituntilterminated; BeforeInstall: WriteTaskXml
-; 3. start it now
-Filename: "{sys}\schtasks.exe"; Parameters: "/run /tn ""{#TaskName}"""; Flags: runhidden waituntilterminated postinstall; Description: "Start Gorilla TPFanControl now"
+; 2. an earlier (sign-in task) version of this installer: retire its task
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; Flags: runhidden waituntilterminated; Check: OldTaskExists
+; 3. the service: created and started if new, restarted after an upgrade
+;    (decided once, before any of this runs: "-i" itself makes the service exist)
+Filename: "{app}\TPFanControl.exe"; Parameters: "-i -q"; StatusMsg: "Installing the fan control service..."; Flags: runhidden waituntilterminated; Check: not ServiceWasThere
+Filename: "{sys}\sc.exe"; Parameters: "start TPFanControl"; Flags: runhidden waituntilterminated; Check: ServiceWasThere
+; 4. the window, now, for the person installing (no admin rights needed).
+;    Not on a silent install: run from an administrator script, the window would
+;    inherit administrator rights; the sign-in shortcut starts it next time.
+Filename: "{app}\TPFanControl.exe"; WorkingDir: "{app}"; Flags: nowait postinstall runasoriginaluser skipifsilent; Description: "Open the Gorilla TPFanControl window"
 
 [UninstallRun]
-; close it properly first: on exit the program hands the fan back to the BIOS
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ [Threading.EventWaitHandle]::OpenExisting('Global\TPFanControl_Close').Set() | Out-Null }} catch {{}}; $p = Get-Process TPFanControl -ErrorAction SilentlyContinue; if ($p) {{ $null = $p.WaitForExit(15000) }}"""; Flags: runhidden waituntilterminated; RunOnceId: "CloseEngine"
-Filename: "{sys}\schtasks.exe"; Parameters: "/end /tn ""{#TaskName}"""; Flags: runhidden waituntilterminated; RunOnceId: "EndTask"
+; 1. stop and remove the service: on stop the engine hands the fan to the BIOS
+Filename: "{app}\TPFanControl.exe"; Parameters: "-u -q"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveService"
+; 2. an engine not running as the service (an earlier, sign-in task version):
+;    ask it to close, which also hands the fan to the BIOS
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ [Threading.EventWaitHandle]::OpenExisting('Global\TPFanControl_Close').Set() | Out-Null }} catch {{}}; Start-Sleep 3"""; Flags: runhidden waituntilterminated; RunOnceId: "CloseEngine"
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; Flags: runhidden waituntilterminated; RunOnceId: "DeleteTask"
+; 3. only now the remote-control windows: they never write the fan, and close
+;    (X) merely hides them, so they are ended outright
+Filename: "{sys}\taskkill.exe"; Parameters: "/f /im TPFanControl.exe"; Flags: runhidden waituntilterminated; RunOnceId: "CloseWindows"
 
 [UninstallDelete]
 Type: files; Name: "{app}\TPFanControl.log"
@@ -178,38 +191,44 @@ begin
            mbError, MB_OK);
 end;
 
-// ----- scheduled task --------------------------------------------------------
-procedure WriteTaskXml;
-var Xml: String; User: String;
+// ----- the service and the earlier sign-in task -----------------------------
+function ServiceExists: Boolean;
+var Code: Integer;
 begin
-  User := GetUserNameString;
-  if Pos('\', User) = 0 then User := GetEnv('USERDOMAIN') + '\' + User;
-  Xml :=
-    '<?xml version="1.0" encoding="UTF-16"?>' + #13#10 +
-    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
-    '  <RegistrationInfo><Description>Starts Gorilla TPFanControl at sign-in with administrator rights, without a prompt.</Description></RegistrationInfo>' + #13#10 +
-    '  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>' + User + '</UserId><Delay>PT15S</Delay></LogonTrigger></Triggers>' + #13#10 +
-    '  <Principals><Principal id="Author"><UserId>' + User + '</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>' + #13#10 +
-    '  <Settings>' + #13#10 +
-    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' + #13#10 +
-    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' + #13#10 +
-    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' + #13#10 +
-    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' + #13#10 +
-    '    <Priority>4</Priority>' + #13#10 +
-    '    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>' + #13#10 +
-    '  </Settings>' + #13#10 +
-    '  <Actions Context="Author"><Exec><Command>' + ExpandConstant('{app}\TPFanControl.exe') + '</Command><WorkingDirectory>' + ExpandConstant('{app}') + '</WorkingDirectory></Exec></Actions>' + #13#10 +
-    '</Task>';
-  SaveStringToFile(ExpandConstant('{tmp}\task.xml'), Xml, False);
+  // sc.exe query exits 0 for an installed service, 1060 when there is none
+  Result := Exec(ExpandConstant('{sys}\sc.exe'), 'query TPFanControl', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
-// ----- before files are copied: close a running copy properly ---------------
+// set in PrepareToInstall, before step 3 of [Run] can create the service
+var ServiceExisted: Boolean;
+
+function ServiceWasThere: Boolean;
+begin
+  Result := ServiceExisted;
+end;
+
+function OldTaskExists: Boolean;
+var Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\schtasks.exe'), '/query /tn "{#TaskName}"', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+// ----- before files are copied: stop everything properly --------------------
+// Order matters: the engine (service, or an earlier sign-in task version) is
+// stopped first, which hands the fan to the BIOS; only then are the remote-
+// control windows ended, so the program file can be replaced.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var Code: Integer;
 begin
   Result := '';
+  ServiceExisted := ServiceExists;
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NoProfile -ExecutionPolicy Bypass -Command "try { [Threading.EventWaitHandle]::OpenExisting(''Global\TPFanControl_Close'').Set() | Out-Null } catch {}; $p = Get-Process TPFanControl -ErrorAction SilentlyContinue; if ($p) { $null = $p.WaitForExit(15000) }"',
+    '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    '$s = Get-Service TPFanControl -ErrorAction SilentlyContinue; ' +
+    'if ($s -and $s.Status -ne ''Stopped'') { Stop-Service TPFanControl -ErrorAction SilentlyContinue; $s.WaitForStatus(''Stopped'', ''00:00:20'') }; ' +
+    'try { [Threading.EventWaitHandle]::OpenExisting(''Global\TPFanControl_Close'').Set() | Out-Null } catch {}; ' +
+    'Start-Sleep 3; ' +
+    'Get-Process TPFanControl -ErrorAction SilentlyContinue | Stop-Process -Force"',
     '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 

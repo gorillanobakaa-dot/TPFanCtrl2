@@ -37,6 +37,7 @@ FANCONTROL::ReadConfig(const char* configfile)
 	strncpy_s(this->MenuLabelSM2, sizeof(this->MenuLabelSM2), "Smart Level 2", 14);
 
 	setzero(SensorOffset, sizeof(SensorOffset));
+	setzero(FanLevelRpm, sizeof(FanLevelRpm));
 	setzero(FSensorOffset, sizeof(FSensorOffset));
 
 	this->State.Fan1SpeedHi = 0x00;
@@ -181,6 +182,31 @@ FANCONTROL::ReadConfig(const char* configfile)
 
 			if (_strnicmp(buf, "StartMinimized=", 15) == 0) {
 				this->StartMinimized = atoi(buf + 15);
+				continue;
+			}
+
+			// Gorilla mode (Gorilla fork). Out-of-range values are ignored: the
+			// floor must be a running level, so a typo cannot stop the fan.
+			if (_strnicmp(buf, "GorillaTarget=", 14) == 0) {
+				int v = atoi(buf + 14);
+				if (v >= 30 && v <= 70) this->GorillaTarget = v;
+				continue;
+			}
+			if (_strnicmp(buf, "GorillaFloor=", 13) == 0) {
+				int v = (int)strtol(buf + 13, NULL, 0);
+				if ((v >= 1 && v <= 7) || v == 64) this->GorillaFloor = v;
+				continue;
+			}
+			// FanLevelRpm=r0 r1 r2 r3 r4 r5 r6 r7 rFull : measured rpm per level
+			if (_strnicmp(buf, "FanLevelRpm=", 12) == 0) {
+				const char* p = buf + 12;
+				for (int k = 0; k < 9 && *p; k++) {
+					char* end = NULL;
+					long v = strtol(p, &end, 10);
+					if (end == p) break;
+					this->FanLevelRpm[k] = (v > 0 && v < 20000) ? (int)v : 0;
+					p = end;
+				}
 				continue;
 			}
 
@@ -977,24 +1003,24 @@ static int ParseManualLevel(const char* text)
 	return (end == text) ? -1 : (int)v;
 }
 
-void
-FANCONTROL::PersistUserMode(int mode, const char* levelText)
+// Rewrite the given KEY=VALUE lines of TPFanControl.ini; every other byte,
+// comment and line ending is kept. Missing keys are appended. Atomic via a
+// temp file. Returns true if the file now holds the values.
+bool
+FANCONTROL::RewriteIniKeys(const char* const* keys, const std::string* values, int count)
 {
-	if (mode < 1 || mode > 3) return;                // never write Active=0 (read-only)
-	int level = (mode == 3) ? ParseManualLevel(levelText) : -1;
-	if (mode == 3 && (level < 0 || level > 255)) return;   // unparsable level: keep the file as is
-
 	const char* path = "TPFanControl.ini";
 	FILE* f = NULL;
-	if (fopen_s(&f, path, "rb") || !f) { this->Trace("Could not open TPFanControl.ini to save the mode"); return; }
+	if (fopen_s(&f, path, "rb") || !f) { this->Trace("Could not open TPFanControl.ini to save settings"); return false; }
 	std::string in, line;
 	char chunk[4096];
 	size_t n;
 	while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) in.append(chunk, n);
 	fclose(f);
 
+	bool done[8] = { false };
+	if (count > 8) count = 8;
 	std::string out;
-	bool doneActive = false, doneSpeed = false;
 	size_t pos = 0;
 	while (pos < in.size()) {
 		size_t nl = in.find('\n', pos);
@@ -1004,37 +1030,65 @@ FANCONTROL::PersistUserMode(int mode, const char* levelText)
 		std::string eol = (line.size() >= 2 && line.compare(line.size() - 2, 2, "\r\n") == 0) ? "\r\n"
 			: (!line.empty() && line.back() == '\n') ? "\n" : "";
 		bool comment = !line.empty() && (line[0] == '/' || line[0] == '#' || line[0] == ';');
-		if (!comment && !doneActive && _strnicmp(line.c_str(), "Active=", 7) == 0) {
-			line = "Active=" + std::to_string(mode) + eol;
-			doneActive = true;
-		}
-		else if (!comment && !doneSpeed && level >= 0 && _strnicmp(line.c_str(), "ManFanSpeed=", 12) == 0) {
-			line = "ManFanSpeed=" + std::to_string(level) + eol;
-			doneSpeed = true;
+		for (int k = 0; !comment && k < count; k++) {
+			size_t kl = strlen(keys[k]);
+			if (!done[k] && _strnicmp(line.c_str(), keys[k], kl) == 0 && line.size() > kl && line[kl] == '=') {
+				line = std::string(keys[k]) + "=" + values[k] + eol;
+				done[k] = true;
+				break;
+			}
 		}
 		out += line;
 	}
 	std::string eolDefault = (in.find("\r\n") != std::string::npos) ? "\r\n" : "\n";
 	if (!out.empty() && out.back() != '\n') out += eolDefault;
-	if (!doneActive) out += "Active=" + std::to_string(mode) + eolDefault;
-	if (!doneSpeed && level >= 0) out += "ManFanSpeed=" + std::to_string(level) + eolDefault;
+	for (int k = 0; k < count; k++)
+		if (!done[k]) out += std::string(keys[k]) + "=" + values[k] + eolDefault;
 
-	if (out == in) return;                              // nothing changed: no write
+	if (out == in) return true;                         // nothing changed: no write
 
 	const char* tmp = "TPFanControl.ini.saving";
-	if (fopen_s(&f, tmp, "wb") || !f) { this->Trace("Could not write TPFanControl.ini.saving"); return; }
+	if (fopen_s(&f, tmp, "wb") || !f) { this->Trace("Could not write TPFanControl.ini.saving"); return false; }
 	size_t written = fwrite(out.data(), 1, out.size(), f);
 	int closed = fclose(f);
 	if (written != out.size() || closed != 0 || !::MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
 		::DeleteFileA(tmp);
-		this->Trace("Could not save the chosen mode to TPFanControl.ini");
-		return;
+		this->Trace("Could not save settings to TPFanControl.ini");
+		return false;
 	}
+	return true;
+}
 
+void
+FANCONTROL::PersistUserMode(int mode, const char* levelText)
+{
+	if (mode < 1 || mode > 4) return;                // never write Active=0 (read-only)
+	int level = (mode == 3) ? ParseManualLevel(levelText) : -1;
+	if (mode == 3 && (level < 0 || level > 255)) return;   // unparsable level: keep the file as is
+
+	const char* keys[2] = { "Active", "ManFanSpeed" };
+	std::string vals[2] = { std::to_string(mode), std::to_string(level) };
+	if (!this->RewriteIniKeys(keys, vals, level >= 0 ? 2 : 1)) return;
+
+	static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla" };
 	char msg[128];
 	if (mode == 3)
 		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: Manual, level %d (used again after a restart)", level);
 	else
-		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: %s (used again after a restart)", mode == 1 ? "BIOS" : "Smart");
+		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: %s (used again after a restart)", names[mode]);
 	this->Trace(msg);
+}
+
+void
+FANCONTROL::PersistGorilla(int target, int floor)
+{
+	if (target < 30 || target > 70 || !((floor >= 1 && floor <= 7) || floor == 64)) return;
+	const char* keys[2] = { "GorillaTarget", "GorillaFloor" };
+	std::string vals[2] = { std::to_string(target), std::to_string(floor) };
+	if (this->RewriteIniKeys(keys, vals, 2)) {
+		char msg[128];
+		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: Gorilla keeps the CPU at %d C, never below level %s",
+			target, floor == 64 ? "full" : std::to_string(floor).c_str());
+		this->Trace(msg);
+	}
 }

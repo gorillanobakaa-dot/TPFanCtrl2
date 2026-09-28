@@ -127,6 +127,12 @@ protected:
 	// hover colour of the custom minimise button, from CaptionHoverColor=RRGGBB
 	// (Gorilla fork; Windows gives programs no way to recolour its own buttons)
 	COLORREF CaptionHoverColor;
+	// Gorilla mode (Gorilla fork): keep the CPU at GorillaTarget C, never run
+	// below fan level GorillaFloor. FanLevelRpm = measured rpm of levels 0-7
+	// and full speed (0x40), from FanLevelRpm= in the ini; 0 = not measured.
+	int GorillaTarget;
+	int GorillaFloor;
+	int FanLevelRpm[9];
 	int ReadErrorCount;
 	int MaxReadErrors;
 	int SecWinUptime;
@@ -192,6 +198,14 @@ protected:
 	// dialog.cpp
 
 	int CurrentModeFromDialog();
+
+	// Gorilla fork: level menus, Gorilla mode, % labels from measured RPM
+	void FillLevelCombos();                 // Manual list + Gorilla minimum list
+	void SelectLevelInCombo(int comboId, int level);
+	int  LevelFromCombo(int comboId);       // -1 if nothing usable is selected
+	void GorillaToDialog();                 // target + minimum -> combos
+	void GorillaFromDialog();               // combos -> members
+	void GorillaControl();                  // fan decision in mode 4
 
 	int ShowAllFromDialog();
 
@@ -289,6 +303,10 @@ protected:
 	// client) as Active= and ManFanSpeed=, so it is used again after a restart.
 	// Never called for the automatic 78 C revert to Smart.
 	void PersistUserMode(int mode, const char* levelText);
+	// Same mechanism for GorillaTarget= and GorillaFloor= (Gorilla fork).
+	void PersistGorilla(int target, int floor);
+	// Rewrite given KEY=VALUE lines of TPFanControl.ini in place (atomic).
+	bool RewriteIniKeys(const char* const* keys, const std::string* values, int count);
 
 	void Tracecsv(const char* textcsv);
 

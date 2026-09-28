@@ -97,6 +97,8 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	Lev64Norm(FALSE),
 	StartMinimized(FALSE),
 	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
+	GorillaTarget(45),                           // CPU target, C (Gorilla fork)
+	GorillaFloor(5),                             // never below level 5 in Gorilla mode
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),
@@ -242,23 +244,12 @@ void FANCONTROL::InitDialogWindow() {
 		}
 
 		// Init manual mode ComboBox (editable, normal mode only, supports 0-255)
+		// Gorilla fork: labelled level menus (% of full speed, measured rpm) and
+		// the Gorilla mode choices; the saved level and settings are selected
 		{
-			HWND hCB = ::GetDlgItem(this->hwndDialog, 8310);
-			if (hCB) {
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"0");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"1");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"2");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"3");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"4");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"5");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"6");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"7");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"0x40 (max)");
-				SendMessageA(hCB, CB_ADDSTRING, 0, (LPARAM)"0x80 (BIOS)");
-				char mbuf[16];
-				_itoa_s(this->ManFanSpeed, mbuf, 10);
-				SetWindowTextA(hCB, mbuf);
-			}
+			this->FillLevelCombos();
+			this->SelectLevelInCombo(8310, this->ManFanSpeed);
+			this->GorillaToDialog();
 		}
 
 	if (SlimDialog == 1) {
@@ -399,6 +390,9 @@ void FANCONTROL::SetupTaskbarAndTimers() {
 	::EnableWindow(::GetDlgItem(this->hwndDialog, 8301), this->ActiveMode);
 	::EnableWindow(::GetDlgItem(this->hwndDialog, 8302), this->ActiveMode);
 	::EnableWindow(::GetDlgItem(this->hwndDialog, 8310), this->ActiveMode);
+	::EnableWindow(::GetDlgItem(this->hwndDialog, 8303), this->ActiveMode);   // Gorilla
+	::EnableWindow(::GetDlgItem(this->hwndDialog, 8320), this->ActiveMode);
+	::EnableWindow(::GetDlgItem(this->hwndDialog, 8321), this->ActiveMode);
 
 	// make it call HandleControl initially
 	::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
@@ -514,7 +508,8 @@ void FANCONTROL::HandleModernStandbyEvent(EVT_HANDLE hEvent) {
 int FANCONTROL::CurrentModeFromDialog() {
 	BOOL modetpauto = ::SendDlgItemMessage(this->hwndDialog, 8300, BM_GETCHECK, 0L, 0L),
 		modefcauto = ::SendDlgItemMessage(this->hwndDialog, 8301, BM_GETCHECK, 0L, 0L),
-		modemanual = ::SendDlgItemMessage(this->hwndDialog, 8302, BM_GETCHECK, 0L, 0L);
+		modemanual = ::SendDlgItemMessage(this->hwndDialog, 8302, BM_GETCHECK, 0L, 0L),
+		modegorilla = ::SendDlgItemMessage(this->hwndDialog, 8303, BM_GETCHECK, 0L, 0L);
 
 	if (modetpauto)
 		this->CurrentMode = 1;
@@ -522,6 +517,8 @@ int FANCONTROL::CurrentModeFromDialog() {
 		this->CurrentMode = 2;
 	else if (modemanual)
 		this->CurrentMode = 3;
+	else if (modegorilla)
+		this->CurrentMode = 4;
 	else
 		this->CurrentMode = -1;
 
@@ -546,6 +543,7 @@ void FANCONTROL::ModeToDialog(int mode) const {
 	::SendDlgItemMessage(this->hwndDialog, 8300, BM_SETCHECK, mode == 1, 0L);
 	::SendDlgItemMessage(this->hwndDialog, 8301, BM_SETCHECK, mode == 2, 0L);
 	::SendDlgItemMessage(this->hwndDialog, 8302, BM_SETCHECK, mode == 3, 0L);
+	::SendDlgItemMessage(this->hwndDialog, 8303, BM_SETCHECK, mode == 4, 0L);   // Gorilla
 }
 
 void FANCONTROL::ShowAllToDialog(int show) const {
@@ -751,6 +749,110 @@ static BOOL DrawCaptionButton(const DRAWITEMSTRUCT* d, COLORREF minHover) {
 	::SelectObject(d->hDC, old);
 	::DeleteObject(pen);
 	return TRUE;
+}
+
+//-------------------------------------------------------------------------
+//  level menus (Gorilla fork)
+//
+//  A ThinkPad fan has 8 levels (0-7) plus full speed (0x40); there is no
+//  finer control, on Windows or on Linux. Each entry starts with the value
+//  the engine parses, then shows what it really means. With FanLevelRpm=
+//  measured in the ini, entries carry "% of full speed" and the rpm, so a
+//  "90 %" choice is honestly shown as the level it maps to.
+//-------------------------------------------------------------------------
+static const int LEVEL_ORDER[] = { 64, 7, 6, 5, 4, 3, 2, 1, 0 };   // fastest first
+
+static int LevelIndex(int level) { return level == 64 ? 8 : level; }
+
+static void LevelLabel(const int* rpm, int level, char* out, size_t n) {
+	const char* val = level == 64 ? "0x40" : nullptr;
+	char num[8];
+	if (!val) { sprintf_s(num, sizeof(num), "%d", level); val = num; }
+	int full = rpm[8] > 0 ? rpm[8] : 0;
+	for (int k = 0; k < 9; k++) if (rpm[k] > full) full = rpm[k];
+	int r = rpm[LevelIndex(level)];
+	const char* what = level == 64 ? "full speed" : level == 0 ? "fan OFF" : nullptr;
+	char lvl[16];
+	if (!what) { sprintf_s(lvl, sizeof(lvl), "level %d", level); what = lvl; }
+	if (full > 0 && (r > 0 || level == 0))
+		sprintf_s(out, n, "%-4s  %3d %%  %s, %d rpm", val, level == 0 ? 0 : (r * 100 + full / 2) / full, what, level == 0 ? 0 : r);
+	else
+		sprintf_s(out, n, "%-4s  %s", val, what);
+}
+
+void FANCONTROL::FillLevelCombos() {
+	char buf[80];
+	HWND man = ::GetDlgItem(this->hwndDialog, 8310);
+	if (man && ::SendMessageA(man, CB_GETCOUNT, 0, 0) == 0) {
+		for (int level : LEVEL_ORDER) {
+			LevelLabel(this->FanLevelRpm, level, buf, sizeof(buf));
+			LRESULT i = ::SendMessageA(man, CB_ADDSTRING, 0, (LPARAM)buf);
+			::SendMessageA(man, CB_SETITEMDATA, i, (LPARAM)level);
+		}
+		LRESULT i = ::SendMessageA(man, CB_ADDSTRING, 0, (LPARAM)"0x80  BIOS decides");
+		::SendMessageA(man, CB_SETITEMDATA, i, (LPARAM)0x80);
+	}
+	// Gorilla minimum: only running levels (a floor of 0 would let the fan stop)
+	HWND flo = ::GetDlgItem(this->hwndDialog, 8321);
+	if (flo && ::SendMessageA(flo, CB_GETCOUNT, 0, 0) == 0) {
+		for (int level : LEVEL_ORDER) {
+			if (level == 0) continue;
+			LevelLabel(this->FanLevelRpm, level, buf, sizeof(buf));
+			LRESULT i = ::SendMessageA(flo, CB_ADDSTRING, 0, (LPARAM)buf);
+			::SendMessageA(flo, CB_SETITEMDATA, i, (LPARAM)level);
+		}
+		// the box is narrow, so open its list as wide as the Manual one to show the rpm
+		RECT r;
+		if (man && ::GetWindowRect(man, &r))
+			::SendMessageA(flo, CB_SETDROPPEDWIDTH, r.right - r.left, 0);
+	}
+	HWND tgt = ::GetDlgItem(this->hwndDialog, 8320);
+	if (tgt && ::SendMessageA(tgt, CB_GETCOUNT, 0, 0) == 0) {
+		for (int c : { 40, 45, 50 }) {
+			sprintf_s(buf, sizeof(buf), "%d C", c);
+			LRESULT i = ::SendMessageA(tgt, CB_ADDSTRING, 0, (LPARAM)buf);
+			::SendMessageA(tgt, CB_SETITEMDATA, i, (LPARAM)c);
+		}
+	}
+}
+
+void FANCONTROL::SelectLevelInCombo(int comboId, int level) {
+	HWND cb = ::GetDlgItem(this->hwndDialog, comboId);
+	if (!cb) return;
+	LRESULT n = ::SendMessageA(cb, CB_GETCOUNT, 0, 0);
+	for (LRESULT i = 0; i < n; i++) {
+		if ((int)::SendMessageA(cb, CB_GETITEMDATA, i, 0) == level) {
+			::SendMessageA(cb, CB_SETCURSEL, i, 0);
+			return;
+		}
+	}
+	if (comboId == 8310) {                     // a value with no entry (e.g. typed): show it as is
+		char num[16]; sprintf_s(num, sizeof(num), "%d", level);
+		::SetWindowTextA(cb, num);
+	}
+}
+
+int FANCONTROL::LevelFromCombo(int comboId) {
+	HWND cb = ::GetDlgItem(this->hwndDialog, comboId);
+	if (!cb) return -1;
+	LRESULT sel = ::SendMessageA(cb, CB_GETCURSEL, 0, 0);
+	if (sel != CB_ERR) return (int)::SendMessageA(cb, CB_GETITEMDATA, sel, 0);
+	char text[32] = "";
+	::GetWindowTextA(cb, text, sizeof(text));
+	char* end = NULL;
+	long v = strtol(text, &end, 0);
+	return end == text ? -1 : (int)v;
+}
+
+void FANCONTROL::GorillaToDialog() {
+	this->SelectLevelInCombo(8320, this->GorillaTarget);
+	this->SelectLevelInCombo(8321, this->GorillaFloor);
+}
+
+void FANCONTROL::GorillaFromDialog() {
+	int t = this->LevelFromCombo(8320), f = this->LevelFromCombo(8321);
+	if (t >= 30 && t <= 70) this->GorillaTarget = t;
+	if ((f >= 1 && f <= 7) || f == 64) this->GorillaFloor = f;
 }
 
 //-------------------------------------------------------------------------
@@ -1251,22 +1353,25 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 		this->UpdateTempDisplay();
 	}
 
-	if (cmd >= 8300 && cmd <= 8302 || cmd == 8310) {  // radio button or manual speed entry
-		char level[64] = "";
-		if (cmd == 8310) {  // auto-switch to Manual when user interacts with speed ComboBox
-			if (HIWORD(mp1) == CBN_EDITCHANGE)  // ignore per-keystroke, only act on CBN_SELCHANGE
-				return 0;
-			this->ModeToDialog(3);
-			// On CBN_SELCHANGE the edit text is not updated yet: read the picked item.
-			HWND hCB = ::GetDlgItem(this->hwndDialog, 8310);
-			LRESULT sel = hCB ? ::SendMessageA(hCB, CB_GETCURSEL, 0, 0) : CB_ERR;
-			if (sel != CB_ERR && ::SendMessageA(hCB, CB_GETLBTEXTLEN, sel, 0) < (LRESULT)sizeof(level))
-				::SendMessageA(hCB, CB_GETLBTEXT, sel, (LPARAM)level);
+	// mode radios (8300-8303), the Manual level (8310), Gorilla target/minimum (8320/8321)
+	if ((cmd >= 8300 && cmd <= 8303) || cmd == 8310 || cmd == 8320 || cmd == 8321) {
+		if ((cmd == 8310 || cmd == 8320 || cmd == 8321) && HIWORD(mp1) != CBN_SELCHANGE)
+			return 0;                            // act on a picked entry, not on keystrokes
+		if (cmd == 8310)
+			this->ModeToDialog(3);               // picking a level means Manual
+		if (cmd == 8320 || cmd == 8321)
+			this->ModeToDialog(4);               // picking a Gorilla setting means Gorilla
+		this->GorillaFromDialog();
+		// the item's value, not its label (CBN_SELCHANGE comes before the text updates)
+		char level[16] = "";
+		int lv = this->LevelFromCombo(8310);
+		if (lv >= 0) sprintf_s(level, sizeof(level), "%d", lv);
+		if (!g_clientMode && HIWORD(mp1) != EN_CHANGE) {
+			int mode = this->CurrentModeFromDialog();
+			this->PersistUserMode(mode, level);
+			if (mode == 4)
+				this->PersistGorilla(this->GorillaTarget, this->GorillaFloor);
 		}
-		if (!level[0])
-			::GetWindowTextA(::GetDlgItem(this->hwndDialog, 8310), level, sizeof(level));
-		if (!g_clientMode && HIWORD(mp1) != EN_CHANGE)
-			this->PersistUserMode(this->CurrentModeFromDialog(), level);
 		::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 	}
 	else {
@@ -1297,6 +1402,15 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 
 		case 5004: // smart2
 			SwitchSmartLevel(1);
+			break;
+
+		case 5006: // Gorilla mode (Gorilla fork)
+			this->ModeToDialog(4);
+			if (!g_clientMode) {
+				this->PersistUserMode(4, NULL);
+				this->PersistGorilla(this->GorillaTarget, this->GorillaFloor);
+			}
+			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 			break;
 
 		case 5005: // manual
@@ -1743,6 +1857,13 @@ void FANCONTROL::PullSharedState() {
 		if (shared->mode != this->CurrentModeFromDialog())
 			this->ModeToDialog(shared->mode);
 		this->IndSmartLevel = shared->smartLevel;
+		// show the Gorilla settings the engine actually runs
+		if ((shared->gorillaTarget != this->GorillaTarget || shared->gorillaFloor != this->GorillaFloor)
+			&& shared->gorillaTarget >= 30 && shared->gorillaTarget <= 70) {
+			this->GorillaTarget = shared->gorillaTarget;
+			this->GorillaFloor = shared->gorillaFloor;
+			this->GorillaToDialog();
+		}
 	}
 
 	::PostMessage(this->hwndDialog, WM__NEWDATA, 1, 0);
@@ -1756,8 +1877,16 @@ void FANCONTROL::SendCommand(int smart) {
 	if (!shared)
 		return;
 
-	::GetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText, sizeof(shared->cmdLevelText));
+	// the level's value, not its label: labels are longer than the 16-byte field
+	int lv = this->LevelFromCombo(8310);
+	if (lv >= 0)
+		sprintf_s(shared->cmdLevelText, sizeof(shared->cmdLevelText), "%d", lv);
+	else
+		::GetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText, sizeof(shared->cmdLevelText));
 
+	this->GorillaFromDialog();
+	shared->cmdGorillaTarget = this->GorillaTarget;
+	shared->cmdGorillaFloor = this->GorillaFloor;
 	shared->cmdSmart = smart;
 	shared->cmdMode = this->CurrentModeFromDialog();
 

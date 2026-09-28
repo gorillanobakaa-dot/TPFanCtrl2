@@ -23,7 +23,7 @@ struct FCSHARED {
 	volatile LONG cmdSeq;     // bumped by a client after every command
 	volatile LONG ackSeq;     // cmdSeq the engine has already acted on
 
-	int mode;                 // 1 bios, 2 smart, 3 manual
+	int mode;                 // 1 bios, 2 smart, 3 manual, 4 gorilla (Gorilla fork)
 	int smartLevel;           // active smart profile, 0 or 1
 	int fanCtrl;              // raw contents of EC register 0x2f
 	int fan1lo, fan1hi;
@@ -33,6 +33,13 @@ struct FCSHARED {
 	int cmdMode;              // mode the user picked
 	int cmdSmart;             // smart profile the user picked, -1 for none
 	char cmdLevelText[16];    // manual level as typed, parsed by the engine
+
+	// Gorilla mode (Gorilla fork): the engine publishes what it runs, a
+	// client asks for a change; -1 in a cmd field means "no change"
+	int gorillaTarget;        // CPU target in C (40/45/50)
+	int gorillaFloor;         // lowest fan level Gorilla mode may use
+	int cmdGorillaTarget;
+	int cmdGorillaFloor;
 
 	volatile LONG traceSeq;   // bumped by the engine for every line below
 	char traceLines[48][160]; // ring of engine log lines, mirrored by clients

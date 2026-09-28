@@ -4,7 +4,8 @@ Gorilla TPFanControl - portable
 Fan control for Lenovo ThinkPad laptops, as a folder that runs from
 anywhere (a USB stick too) without installing. It is the same program as
 the installer: a fork of TPFanCtrl2 with a readable window, a normal title
-bar and a manual level that survives a restart. The fan logic is unchanged.
+bar, a manual level that survives a restart, and Gorilla mode (cooling
+first). BIOS, Smart and Manual work exactly as upstream.
 
 ONLY FOR THINKPADS
   It controls the fan by writing to ThinkPad embedded-controller registers.
@@ -21,8 +22,14 @@ FIRST TIME ON A COMPUTER
   2. Double-click "2 - Run TPFanControl (needs admin).cmd".
 
   Windows asks for administrator rights every time you start it; the fan
-  chip is only reachable with them. To start it at sign-in without a
-  prompt, use the installer (Gorilla-TPFanControl-...-Setup.exe) instead.
+  chip is only reachable with them. To have it start with the computer
+  without a prompt, use the installer (Gorilla-TPFanControl-...-Setup.exe)
+  instead: it sets the fan control up as a Windows service.
+
+GORILLA MODE
+  Keeps the CPU at the temperature you pick (40, 45 or 50 C): full speed at
+  that temperature and above, level 7 within 5 C below it, and never slower
+  than the minimum you pick. Noise is not a factor.
 
 SETTINGS
   TPFanControl.ini in this folder. A mode or level you pick in the window is
