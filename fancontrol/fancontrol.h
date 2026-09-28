@@ -124,6 +124,9 @@ protected:
 		StartMinimized,
 		NoWaitMessage,
 		Runs_as_service;
+	// hover colour of the custom minimise button, from CaptionHoverColor=RRGGBB
+	// (Gorilla fork; Windows gives programs no way to recolour its own buttons)
+	COLORREF CaptionHoverColor;
 	int ReadErrorCount;
 	int MaxReadErrors;
 	int SecWinUptime;

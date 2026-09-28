@@ -29,6 +29,7 @@
 
 extern bool g_clientMode;
 extern HANDLE CreateSharedEvent(const char* name);
+static void InitCustomTitleBar(HWND dlg);   // custom title bar, defined below
 
 DEFINE_GUID(GUID_LIDSWITCH_STATE_CHANGE,
 	0xba3e0f4d, 0xb817, 0x4094,
@@ -95,6 +96,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	IconColorFan(FALSE),
 	Lev64Norm(FALSE),
 	StartMinimized(FALSE),
+	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),
@@ -209,6 +211,8 @@ void FANCONTROL::InitDialogWindow() {
 		strcat_s(this->Title, sizeof(this->Title), FANCONTROLVERSIOND);
 
 	::SetWindowText(this->hwndDialog, this->Title);
+	::SetDlgItemText(this->hwndDialog, 8120, this->Title);   // custom title strip
+	InitCustomTitleBar(this->hwndDialog);
 
 	::SetWindowLongPtr(this->hwndDialog, GWLP_USERDATA, (LONG_PTR)this);
 
@@ -646,6 +650,110 @@ static inline COLORREF GetTempColor(int temp, const int* iconLevels) {
 }
 
 //-------------------------------------------------------------------------
+//  custom title bar (Gorilla fork)
+//
+//  Windows draws its own caption buttons and lets no program recolour their
+//  hover; on Windows 11 minimise only turns a faint grey. The main dialogs
+//  therefore have no WS_CAPTION and carry their own strip: title text 8120,
+//  minimise 8121 and close 8122 (owner-drawn). Minimise hovers in
+//  CaptionHoverColor (ini), close in the usual red. The strip drags the window.
+//-------------------------------------------------------------------------
+static const char GFC_HOVER[] = "GFC_Hover";
+static const int  TITLE_STRIP_DLU = 16;
+
+static LRESULT CALLBACK CaptionButtonProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+	switch (msg) {
+	case WM_MOUSEMOVE:
+		if (!::GetPropA(h, GFC_HOVER)) {
+			::SetPropA(h, GFC_HOVER, (HANDLE)1);
+			TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, h, 0 };
+			::TrackMouseEvent(&t);
+			::InvalidateRect(h, NULL, FALSE);
+		}
+		break;
+	case WM_MOUSELEAVE:
+		::RemovePropA(h, GFC_HOVER);
+		::InvalidateRect(h, NULL, FALSE);
+		break;
+	case WM_NCDESTROY:
+		::RemovePropA(h, GFC_HOVER);
+		::RemoveWindowSubclass(h, CaptionButtonProc, 1);
+		break;
+	}
+	return ::DefSubclassProc(h, msg, wp, lp);
+}
+
+static void InitCustomTitleBar(HWND dlg) {
+	if (!::GetDlgItem(dlg, 8121)) return;        // slim dialogs keep the Windows caption
+
+	// A CAPTION statement in a dialog template switches WS_CAPTION back on, so
+	// the Windows title bar is removed here, keeping the client area's size.
+	LONG_PTR style = ::GetWindowLongPtr(dlg, GWL_STYLE);
+	if (style & WS_CAPTION) {
+		RECT client; ::GetClientRect(dlg, &client);
+		style &= ~(LONG_PTR)WS_CAPTION;
+		::SetWindowLongPtr(dlg, GWL_STYLE, style);
+		RECT want = client;
+		::AdjustWindowRectEx(&want, (DWORD)style, FALSE, (DWORD)::GetWindowLongPtr(dlg, GWL_EXSTYLE));
+		::SetWindowPos(dlg, NULL, 0, 0, want.right - want.left, want.bottom - want.top,
+			SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+	}
+
+	for (int id = 8121; id <= 8122; id++) {
+		HWND b = ::GetDlgItem(dlg, id);
+		if (b) ::SetWindowSubclass(b, CaptionButtonProc, 1, 0);
+	}
+	static HFONT s_bold = NULL;                  // one font for the process
+	HWND t = ::GetDlgItem(dlg, 8120);
+	HFONT f = (HFONT)::SendMessage(dlg, WM_GETFONT, 0, 0);
+	if (t && f) {
+		if (!s_bold) {
+			LOGFONT lf;
+			if (::GetObject(f, sizeof(lf), &lf)) { lf.lfWeight = FW_SEMIBOLD; s_bold = ::CreateFontIndirect(&lf); }
+		}
+		if (s_bold) ::SendMessage(t, WM_SETFONT, (WPARAM)s_bold, TRUE);
+	}
+}
+
+static int TitleStripHeightPx(HWND dlg) {
+	RECT r = { 0, 0, 0, TITLE_STRIP_DLU };
+	::MapDialogRect(dlg, &r);
+	return r.bottom;
+}
+
+static BOOL DrawCaptionButton(const DRAWITEMSTRUCT* d, COLORREF minHover) {
+	const bool isClose = d->CtlID == 8122;
+	const bool hover = ::GetPropA(d->hwndItem, GFC_HOVER) != NULL;
+	const bool pressed = (d->itemState & ODS_SELECTED) != 0;
+	const COLORREF hot = isClose ? RGB(0xE8, 0x11, 0x23) : minHover;
+	COLORREF bg = ::GetSysColor(COLOR_BTNFACE);
+	if (pressed)
+		bg = RGB(GetRValue(hot) * 3 / 4, GetGValue(hot) * 3 / 4, GetBValue(hot) * 3 / 4);
+	else if (hover)
+		bg = hot;
+	HBRUSH br = ::CreateSolidBrush(bg);
+	::FillRect(d->hDC, &d->rcItem, br);
+	::DeleteObject(br);
+
+	const COLORREF ink = (hover || pressed) ? RGB(0xFF, 0xFF, 0xFF) : ::GetSysColor(COLOR_BTNTEXT);
+	const int w = d->rcItem.right - d->rcItem.left, h = d->rcItem.bottom - d->rcItem.top;
+	int s = h * 2 / 5; if (s < 6) s = 6;          // glyph size grows with display scaling
+	const int cx = d->rcItem.left + w / 2, cy = d->rcItem.top + h / 2;
+	HPEN pen = ::CreatePen(PS_SOLID, h >= 28 ? 2 : 1, ink);
+	HGDIOBJ old = ::SelectObject(d->hDC, pen);
+	if (isClose) {
+		::MoveToEx(d->hDC, cx - s / 2, cy - s / 2, NULL); ::LineTo(d->hDC, cx + s / 2 + 1, cy + s / 2 + 1);
+		::MoveToEx(d->hDC, cx + s / 2, cy - s / 2, NULL); ::LineTo(d->hDC, cx - s / 2 - 1, cy + s / 2 + 1);
+	}
+	else {
+		::MoveToEx(d->hDC, cx - s / 2, cy, NULL); ::LineTo(d->hDC, cx + s / 2 + 1, cy);
+	}
+	::SelectObject(d->hDC, old);
+	::DeleteObject(pen);
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------
 //  dialog window procedure — thin dispatcher
 //-------------------------------------------------------------------------
 ULONG FANCONTROL::DlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2) {
@@ -743,6 +851,24 @@ ULONG FANCONTROL::DlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2) {
 
 	case WM_COMMAND:
 		return OnCommand(mp1);
+
+	case WM_DRAWITEM:   // custom title bar buttons
+		if (mp1 == 8121 || mp1 == 8122)
+			return DrawCaptionButton((const DRAWITEMSTRUCT*)mp2, this->CaptionHoverColor);
+		break;
+
+	case WM_NCHITTEST: {  // the custom title strip moves the window, like a caption
+		POINT pt = { (short)LOWORD(mp2), (short)HIWORD(mp2) };
+		::ScreenToClient(hwnd, &pt);
+		if (pt.y >= 0 && pt.y < TitleStripHeightPx(hwnd) && ::GetDlgItem(hwnd, 8121)) {
+			HWND child = ::ChildWindowFromPointEx(hwnd, pt, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+			if (child == NULL || child == hwnd || child == ::GetDlgItem(hwnd, 8120)) {
+				::SetWindowLongPtr(hwnd, DWLP_MSGRESULT, HTCAPTION);
+				return TRUE;
+			}
+		}
+		break;
+	}
 
 	case WM_CLOSE:
 		// close = hide to the tray; fan control keeps running (Exit is in the tray menu)
@@ -899,6 +1025,7 @@ ULONG FANCONTROL::OnTimer(WPARAM timerId) {
 		}
 		else if (!res && strcmp(this->LastTitle, this->Title) != 0) {
 			::SetWindowText(this->hwndDialog, this->Title);
+			::SetDlgItemText(this->hwndDialog, 8120, this->Title);   // custom title strip
 			strcpy_s(this->LastTitle, sizeof(this->LastTitle), this->Title);
 		}
 
@@ -1144,6 +1271,14 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 	}
 	else {
 		switch (cmd) {
+		case 8121: // custom title bar: minimise to the taskbar
+			::ShowWindow(this->hwndDialog, SW_MINIMIZE);
+			break;
+
+		case 8122: // custom title bar: close = hide to the tray (fan control keeps running)
+			::SendMessage(this->hwndDialog, WM_CLOSE, 0, 0);
+			break;
+
 		case 5001: // bios
 			this->ModeToDialog(1);
 			if (!g_clientMode) this->PersistUserMode(1, NULL);

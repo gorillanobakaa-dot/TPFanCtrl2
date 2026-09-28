@@ -184,6 +184,17 @@ FANCONTROL::ReadConfig(const char* configfile)
 				continue;
 			}
 
+			// CaptionHoverColor=RRGGBB (hex, optional leading #): minimise hover colour
+			if (_strnicmp(buf, "CaptionHoverColor=", 18) == 0) {
+				const char* v = buf + 18;
+				if (*v == '#') v++;
+				char* end = NULL;
+				unsigned long rgb = strtoul(v, &end, 16);
+				if (end && end - v == 6)
+					this->CaptionHoverColor = RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+				continue;
+			}
+
 			if (_strnicmp(buf, "NoBallons=", 10) == 0) {
 				this->NoBallons = atoi(buf + 10);
 				continue;
