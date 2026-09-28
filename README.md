@@ -8,6 +8,18 @@ A fork of [mews-se/TPFanCtrl2](https://github.com/mews-se/TPFanCtrl2) that
 changes the window and the packaging, and adds one mode. **BIOS, Smart and
 Manual work exactly as upstream.**
 
+![The Gorilla TPFanControl window on a ThinkPad L15 Gen 3: temperatures, fan state and modes, and the log](docs/screenshots/windows-main-window.png)
+
+*The window (Windows, 2.5.1-gorilla.2): every sensor in one list, the fan at
+level 3 (2,591 rpm), the four modes including Gorilla, and the log.*
+
+![The Manual level list, with each level shown as a percentage of full speed and its measured rpm](docs/screenshots/windows-level-list-percent.jpg)
+
+*The Manual list, with the fan's speeds measured on this laptop: each level is
+shown as its real share of full speed, from 0x40 (100 %, 3,445 rpm) down to 1
+(51 %, 1,765 rpm) and 0 (fan off). The fan chip takes only these levels, so
+these are the choices that exist.*
+
 - **Gorilla mode (cooling first).** A fourth mode for people who want the
   laptop cool and do not mind the noise. You pick a CPU temperature to keep
   (40, 45 or 50 C) and a minimum speed. At the target and above the fan runs
