@@ -1,0 +1,19 @@
+[Unit]
+Description=Gorilla TPFanControl (ThinkPad fan control)
+Documentation=file:///usr/share/doc/gorilla-tpfancontrol/README.md
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gorilla-fan daemon
+# However the service stops (stop, crash, uninstall), the BIOS gets the fan back.
+ExecStopPost=/usr/bin/gorilla-fan release
+Restart=on-failure
+RestartSec=5
+# It writes only /proc/acpi/ibm/fan and /etc/gorilla-fan.conf.
+NoNewPrivileges=yes
+ProtectSystem=true
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Gorilla TPFanControl: after install or upgrade.
+set -e
+
+reload_thinkpad_acpi() {
+    # The package's /etc/modprobe.d/gorilla-fan.conf sets fan_control=1, which
+    # thinkpad_acpi only reads when it loads. Reload it now if it is loaded
+    # without it; if it is busy, the next restart picks the option up.
+    p=/sys/module/thinkpad_acpi/parameters/fan_control
+    if [ -r "$p" ] && [ "$(cat "$p")" != "Y" ]; then
+        if modprobe -r thinkpad_acpi 2>/dev/null && modprobe thinkpad_acpi 2>/dev/null; then
+            echo "gorilla-fan: thinkpad_acpi reloaded with fan_control=1"
+        else
+            modprobe thinkpad_acpi 2>/dev/null || true
+            echo "gorilla-fan: restart the computer once so the fan can be set (thinkpad_acpi is in use)"
+        fi
+    fi
+}
+
+if [ "$1" = "configure" ]; then
+    reload_thinkpad_acpi
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        systemctl enable gorilla-fan.service || true
+        systemctl restart gorilla-fan.service || true
+    fi
+    if [ ! -e /proc/acpi/ibm/fan ]; then
+        echo "gorilla-fan: no ThinkPad fan interface on this computer; the service stays idle and changes nothing."
+    fi
+fi
+exit 0

@@ -1,0 +1,5 @@
+# Scripts and unit files run on Linux: Unix line endings, whatever the checkout.
+packaging/** text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf

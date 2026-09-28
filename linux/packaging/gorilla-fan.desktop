@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Gorilla TPFanControl
+GenericName=ThinkPad fan control
+Comment=See the temperatures and set the ThinkPad fan: BIOS, Smart, Manual or Gorilla (cooling first)
+Exec=gorilla-fan
+Icon=gorilla-fan
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=fan;thinkpad;temperature;cooling;
+StartupWMClass=gorilla-fan

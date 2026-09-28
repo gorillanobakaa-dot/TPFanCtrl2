@@ -1,0 +1,98 @@
+[package]
+name = "gorilla-tpfancontrol"
+version = "0.1.0"
+edition = "2021"
+description = "ThinkPad fan control with Gorilla mode (cooling first)"
+license = "Unlicense"
+repository = "https://github.com/gorillanobakaa-dot/TPFanCtrl2"
+readme = "README.md"
+
+# One program, two roles, like the Windows version: `gorilla-fan daemon` is the
+# root service that writes the fan (systemd starts it at boot), and plain
+# `gorilla-fan` is the window, which needs no rights and only talks to it.
+[[bin]]
+name = "gorilla-fan"
+path = "src/main.rs"
+
+# The only dependency: the window. egui with the OpenGL (glow) backend, as in
+# GPNH: glow needs only OpenGL 2, and eframe loads X11/Wayland/GL at run time
+# (dlopen), so the binary links against nothing but the C library.
+[dependencies]
+eframe = { version = "0.32", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# ---------------------------------------------------------------------------
+# Debian package (cargo deb --no-build --target x86_64-unknown-linux-gnu)
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+name = "gorilla-tpfancontrol"
+maintainer = "Gorilla Fan Control <noreply@github.com>"
+copyright = "Public domain (Unlicense)"
+section = "utils"
+priority = "optional"
+depends = "libc6 (>= 2.28), systemd, kmod"
+# the window loads these at run time (dlopen); the service needs none of them
+recommends = "libgl1, libegl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2, libwayland-client0, libwayland-egl1"
+extended-description = """\
+Fan control for Lenovo ThinkPads through the kernel's thinkpad_acpi driver.
+A root service (gorilla-fan.service) drives the fan from boot in one of four
+modes: BIOS, Smart (a temperature curve), Manual (a fixed level) or Gorilla
+(cooling first: keep the CPU at a chosen temperature, never below a minimum
+speed). The window shows the temperatures and the fan, and steers the service
+without root rights. On computers without a ThinkPad fan interface the service
+stays idle and never writes anything."""
+maintainer-scripts = "packaging/debian/"
+conf-files = ["/etc/modprobe.d/gorilla-fan.conf"]
+assets = [
+    ["target/release/gorilla-fan", "usr/bin/", "755"],
+    ["packaging/gorilla-fan.service", "usr/lib/systemd/system/", "644"],
+    ["packaging/gorilla-fan-modprobe.conf", "etc/modprobe.d/gorilla-fan.conf", "644"],
+    ["packaging/gorilla-fan.conf.default", "usr/share/gorilla-fan/", "644"],
+    ["packaging/gorilla-fan.desktop", "usr/share/applications/", "644"],
+    ["packaging/gorilla-fan.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/gorilla-tpfancontrol/README.md", "644"],
+]
+
+# ---------------------------------------------------------------------------
+# RPM package (cargo generate-rpm --target x86_64-unknown-linux-gnu)
+# ---------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+name = "gorilla-tpfancontrol"
+summary = "ThinkPad fan control with Gorilla mode (cooling first)"
+license = "Unlicense"
+release = "1"
+post_install_script = "packaging/rpm/post_install.sh"
+pre_uninstall_script = "packaging/rpm/pre_uninstall.sh"
+post_uninstall_script = "packaging/rpm/post_uninstall.sh"
+assets = [
+    { source = "target/release/gorilla-fan", dest = "/usr/bin/gorilla-fan", mode = "755" },
+    { source = "packaging/gorilla-fan.service", dest = "/usr/lib/systemd/system/gorilla-fan.service", mode = "644" },
+    { source = "packaging/gorilla-fan-modprobe.conf", dest = "/etc/modprobe.d/gorilla-fan.conf", mode = "644", config = true },
+    { source = "packaging/gorilla-fan.conf.default", dest = "/usr/share/gorilla-fan/gorilla-fan.conf.default", mode = "644" },
+    { source = "packaging/gorilla-fan.desktop", dest = "/usr/share/applications/gorilla-fan.desktop", mode = "644" },
+    { source = "packaging/gorilla-fan.svg", dest = "/usr/share/icons/hicolor/scalable/apps/gorilla-fan.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/gorilla-tpfancontrol/README.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+systemd = "*"
+kmod = "*"
+
+# the window loads these at run time (dlopen); the service needs none of them
+[package.metadata.generate-rpm.recommends]
+libglvnd-glx = "*"
+libglvnd-egl = "*"
+libxkbcommon = "*"
+libxkbcommon-x11 = "*"
+libX11 = "*"
+libXcursor = "*"
+libXi = "*"
+libXrandr = "*"
+libwayland-client = "*"
+libwayland-egl = "*"

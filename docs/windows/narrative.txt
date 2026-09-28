@@ -1,0 +1,111 @@
+Gorilla TPFanControl for Windows - session notes, 2026-09-27 and 2026-09-28
+============================================================================
+
+Starting point
+--------------
+The test laptop is a ThinkPad L15 Gen 3 (one fan). The goal: keep it cool
+(40-50 C) for a long service life; fan noise does not matter. Upstream
+TPFanCtrl2 v2.5.1 (mews-se) drove the fan correctly but:
+- the temperature list was smaller than its own columns: it scrolled both
+  ways and showed about half of the sensors;
+- the window had a close button but no minimise button; the minimise that
+  was added first did not light up on hover (the close button did);
+- a Manual level picked in the window was lost at the next restart;
+- clicking Manual started at level 0, which switches the fan OFF;
+- it had no installer: it ran by hand, as administrator, with a prompt.
+
+Decisions, in order
+-------------------
+1. Fork, do not rewrite. The owner asked to leave the fan logic alone
+   (it works) and to fix the window and add a proper installer. BIOS, Smart
+   and Manual stay upstream code.
+2. Window: bigger dialog, DPI-scaled columns, a custom-drawn title bar. The
+   standard caption cannot colour the minimise button on hover, so the
+   caption is removed at run time (the .rc CAPTION statement re-adds
+   WS_CAPTION, which caused a doubled title bar once) and two owner-drawn
+   buttons replace it. Minimise hover is bright blue 00B4FF
+   (CaptionHoverColor=RRGGBB in the ini); close hover is red.
+3. Persistence: a mode or level picked by hand is written back to
+   TPFanControl.ini (RewriteIniKeys: other bytes untouched, write to
+   TPFanControl.ini.saving, then MoveFileEx). The automatic revert from
+   Manual to Smart at ManModeExit (78 C) is deliberately NOT saved.
+4. Default ManFanSpeed=4, not 0.
+5. Installer: Inno Setup 6, one Setup.exe with everything inside (the exe
+   with a static C runtime, the PawnIO 2.2.0 driver installer checked
+   against winget's SHA-256, the LpcACPIEC module, the default ini).
+   Refuses non-ThinkPads (WMI manufacturer + family/version/model) and
+   non-x64 or pre-1809 Windows. A portable zip is built from the same files.
+   Released as v2.5.1-gorilla.1.
+6. Measured, then mapped honestly. The owner asked for 40-100 % speed
+   choices. The EC takes only levels 0-7, 0x40 (disengaged, full) and 0x80
+   (BIOS), so there is no free percentage. CALIBRATE-v1 ran each level 30 s:
+   L0 0, L1 1765, L2 2179, L3 2586, L4 2790, L5 2999, L6 3197, L7 3423,
+   full 3445 rpm. Level 7 is already about full speed; nothing between 0
+   and 51 % exists. The lists now label each level with its real
+   percentage and rpm (FanLevelRpm= in the ini); without measurements they
+   show plain levels. The labels never change what is written.
+7. Gorilla mode. The owner first chose "fixed speed from boot", then
+   clarified the goal: keep the temperature at 40-50 C all the time, noise
+   is not a concern, and the laptop should last many years. So Gorilla = a
+   CPU target (40/45/50 C) plus a minimum level:
+   full speed at the target and above, level 7 within 5 C below it,
+   otherwise the minimum; never below the minimum; full speed above
+   ManModeExit whatever the settings; hysteresis 2 C on each band.
+   It steers by the CPU sensor (sensor 0), not the hottest sensor, because
+   the L15's 'pwr' sensor reads 66 C (or 0) whatever the fan does - it held
+   66 C at full speed while the CPU read 45-50 C.
+   Upstream's staircase applies: 0x40 is only engaged above 4000 rpm, so
+   on the L15 "full speed" in practice stays at level 7.
+8. Windows service. The engine now runs as upstream's TPFanControl service
+   (LocalSystem, automatic start), so the fan is controlled from boot,
+   before sign-in, without a prompt. The window is a client (asInvoker)
+   started at every sign-in from the common Startup folder; it passes
+   choices to the engine through the shared-memory block FCSHARED
+   (cmdSeq/ackSeq), and the engine saves them. Upgrading from gorilla.1
+   deletes the old sign-in scheduled task.
+
+Things that went wrong, and what was changed
+--------------------------------------------
+- A regex-based relayout of the .rc took control IDs for coordinates; it
+  was reverted with git and redone with a parser that follows the resource
+  grammar and checks every old control ID still exists.
+- Inno Setup Pascal has no VarToStr or CompareVersion; replaced with
+  VarIsNull checks, StrToVersion and ComparePackedVersion.
+- The installer evaluated "does the service exist?" after "-i" had created
+  it, so an upgrade ran "sc start" on a running service (error 1056).
+  Fixed: decided once in PrepareToInstall, before anything runs.
+- A silent install started from an administrator script opened the window
+  with administrator rights (runasoriginaluser inherits the elevated
+  shell), where normal tools cannot click it (UIPI). Fixed: skipifsilent;
+  the sign-in shortcut starts it normally.
+- The "never slower than" list was cut off (narrow box); it now opens as
+  wide as the Manual list (CB_SETDROPPEDWIDTH).
+
+Tests actually run on the L15 Gen 3
+------------------------------------
+- gorilla.1: uninstall/reinstall test 16/16; the log shows "On close: Set fan
+  control to 0x80".
+- Manual level kept across a restart.
+- gorilla.2 upgrade from gorilla.1: service Running/Auto/LocalSystem, old
+  task removed, engine in session 0, window in the user session.
+- Reinstall over itself: "sc start" path used (exit 0), no elevated window.
+- In the normal-rights window: the Manual list shows 100/99/93/87/81/75/63/
+  51/0 % with rpm; Gorilla selected -> "Change Mode from Manual->Gorilla:
+  keep the CPU at 45 C, never below level 5", fan to level 7 (3486 rpm at
+  45-46 C), Active=4 saved; after a service restart it came back as
+  "BIOS->Gorilla".
+- Exit (the Global\TPFanControl_Close event) stops the service and the
+  window.
+- gorilla.2 uninstall/reinstall test 22/22: stopping the service logs "On
+  close: Set fan control to 0x80, Result: OK"; the service, the program,
+  the shortcuts and the installed-apps entry are removed; the ini and
+  PawnIO are kept; reinstall recreates the service in Gorilla mode.
+- GitHub release digests matched the local SHA-256 of both downloads.
+
+Not tested
+----------
+- Any ThinkPad other than the L15 Gen 3 (dual-fan models, AMD models).
+- Windows 10 (the installer allows 1809+; only Windows 11 was used).
+- The portable zip on a second computer.
+- Opening the window rewrites the same values into the ini once (the
+  client's first command); harmless, not fixed.

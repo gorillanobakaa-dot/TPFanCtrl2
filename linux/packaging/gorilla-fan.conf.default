@@ -1,0 +1,48 @@
+// Gorilla TPFanControl for Linux - settings (/etc/gorilla-fan.conf)
+//
+// Same key names as the Windows version's TPFanControl.ini, so a line can be
+// copied from one to the other. Lines starting with // are comments. The fan
+// service reads this file when it starts: after editing by hand, run
+//   sudo systemctl restart gorilla-fan
+// Choices made in the window are saved here by the service itself.
+//
+// -----------------------------------------------------------------
+// Mode at start: 1 BIOS, 2 Smart (the curve below), 3 Manual (ManFanSpeed),
+// 4 Gorilla (cooling first, see below).
+Active=2
+// -----------------------------------------------------------------
+// Manual mode level: 0-7 (0 stops the fan), or 0x40 for full speed.
+ManFanSpeed=4
+// -----------------------------------------------------------------
+// Above this temperature (C): Manual switches back to Smart, and Gorilla
+// runs full speed whatever its settings.
+ManModeExit=78
+// -----------------------------------------------------------------
+// Seconds between decisions.
+Cycle=5
+// -----------------------------------------------------------------
+// Sensors left out of the "hottest sensor" that Smart mode steers by
+// (names as in the window: cpu aps crd gpu no5 x7d bat x7f bus pci pwr xc3).
+IgnoreSensors=
+// -----------------------------------------------------------------
+// Gorilla mode (cooling first; noise is not a factor).
+// Steers by the CPU sensor: full speed from GorillaTarget, level 7 within
+// 5 C below it, otherwise GorillaFloor. Never slower than GorillaFloor.
+// GorillaTarget: 30-70 C (the window offers 40, 45, 50).
+// GorillaFloor: 1-7, or 64 (0x40, full speed all the time).
+GorillaTarget=45
+GorillaFloor=5
+// -----------------------------------------------------------------
+// Measured fan speed (rpm) of levels 0-7 and full speed, 9 numbers. Only
+// used to label the level lists with % and rpm. The window's "Measure fan
+// speeds" button fills it in. Example, ThinkPad L15 Gen 3:
+// FanLevelRpm=0 1765 2179 2586 2790 2999 3197 3423 3445
+// -----------------------------------------------------------------
+// Smart mode curve: Level=temperature fan-level [hysteresis-up hysteresis-down]
+// The fan takes the highest level whose temperature the hottest sensor has
+// reached. Upstream TPFanControl's default curve:
+Level=50 0
+Level=60 1
+Level=70 2
+Level=80 4
+Level=90 7

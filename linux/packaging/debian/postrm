@@ -1,0 +1,11 @@
+#!/bin/sh
+# Gorilla TPFanControl: after removal. "purge" also deletes the settings the
+# service created (/etc/gorilla-fan.conf); a plain remove keeps them.
+set -e
+if [ "$1" = "purge" ]; then
+    rm -f /etc/gorilla-fan.conf /etc/gorilla-fan.conf.saving
+fi
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+exit 0

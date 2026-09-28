@@ -1,0 +1,11 @@
+#!/bin/sh
+# Gorilla TPFanControl: before removal or upgrade. Stopping the service runs
+# `gorilla-fan release` (ExecStopPost), which hands the fan back to the BIOS.
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl stop gorilla-fan.service || true
+    if [ "$1" = "remove" ]; then
+        systemctl disable gorilla-fan.service || true
+    fi
+fi
+exit 0
