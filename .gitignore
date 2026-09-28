@@ -43,3 +43,7 @@
 *.vcxproj.user
 UpgradeLog*.htm
 Backup/
+
+installer/output/
+installer/thirdparty/
+fancontrol/Release/

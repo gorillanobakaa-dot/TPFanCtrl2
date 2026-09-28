@@ -1,0 +1,22 @@
+Third-party components in Gorilla TPFanControl
+==============================================
+
+TPFanControl / TPFanCtrl2
+  Upstream: https://github.com/mews-se/TPFanCtrl2
+  Licence:  The Unlicense (public domain). See TPFanControl-Unlicense.txt.
+  This build is a fork with window and settings changes; the fan logic is
+  unchanged.
+
+LpcACPIEC.bin (PawnIO module for the embedded controller)
+  Source:   https://github.com/namazso/PawnIO.Modules
+  Licence:  GNU Lesser General Public License v2.1.
+            See LpcACPIEC-LGPL-2.1.txt.
+
+PawnIO driver 2.2.0 (installed by Setup, shipped unmodified)
+  Installer: PawnIO_setup.exe from https://github.com/namazso/PawnIO.Setup,
+             release 2.2.0, signed by namazso,
+             SHA-256 1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032
+  Driver source: https://github.com/namazso/PawnIO
+  Licence:   GNU General Public License v2.0 for the driver. The complete
+             corresponding source code is available at the link above.
+  Home page: https://pawnio.eu
