@@ -67,6 +67,9 @@ name = "gorilla-tpfancontrol"
 summary = "ThinkPad fan control with Gorilla mode (cooling first)"
 license = "Unlicense"
 release = "1"
+# built on Windows, where ldd cannot read a Linux binary: requirements are
+# declared by hand (glibc 2.28 = the highest symbol version in the binary)
+auto-req = "no"
 post_install_script = "packaging/rpm/post_install.sh"
 pre_uninstall_script = "packaging/rpm/pre_uninstall.sh"
 post_uninstall_script = "packaging/rpm/post_uninstall.sh"
@@ -81,6 +84,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
+glibc = ">= 2.28"
 systemd = "*"
 kmod = "*"
 

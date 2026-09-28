@@ -1,0 +1,115 @@
+Gorilla TPFanControl for Linux 0.1.0 - session notes, 2026-09-28
+================================================================
+
+Why
+---
+The owner asked for Debian and RPM packages with the same modes and the same
+window as the Windows version 2.5.1-gorilla.2. The Windows program cannot be
+ported directly: it reaches the embedded controller through a Windows driver
+(PawnIO) and is a Win32 dialog. Linux already has a kernel driver for the
+ThinkPad fan, thinkpad_acpi, with the same levels (0-7, disengaged/full-speed
+= 0x40, auto = 0x80) and the same sensor order. So the Linux version is a new
+program that ports the fan logic, not the code.
+
+The owner's Debian machine is not a ThinkPad. The Linux build therefore
+cannot be fan-tested by the owner either; it can be installed there to check
+that it installs, starts, shows the window, and stays idle.
+
+Decisions
+---------
+1. Rust, one binary in two roles, like the Windows engine/client split:
+   `gorilla-fan daemon` (root, systemd) writes the fan; `gorilla-fan` is the
+   window and needs no rights. The only dependency is eframe/egui 0.32 with
+   the glow (OpenGL 2) backend, the same choice as the owner's GPNH project.
+   eframe loads X11, Wayland, GL and xkbcommon at run time (dlopen), so the
+   binary hard-links only libc, libm, libpthread and libdl (checked with
+   pyelftools: DT_NEEDED = libm.so.6, libc.so.6, libpthread.so.0, libdl.so.2).
+2. The fan logic is ported line by line from fanstuff.cpp: SmartControl
+   (ramp up to the highest reached level with hystUp, ramp down to the first
+   level at or below temp - hystDown, reset to the bottom after another mode,
+   0x40 only above 4000 rpm), Manual (reverts to Smart above ManModeExit, not
+   saved), GorillaControl (CPU sensor, full at the target, level 7 within 5 C,
+   the floor below; 2 C hysteresis per band; full above ManModeExit).
+   Not ported: sensor offsets, the erratic-sensor guard, Fahrenheit, the
+   second Smart profile, hotkeys, the tray icon.
+3. Same key names as TPFanControl.ini (Active, ManFanSpeed, ManModeExit,
+   Cycle, IgnoreSensors, GorillaTarget, GorillaFloor, FanLevelRpm, Level=),
+   so lines can be copied between the two. Settings live in
+   /etc/gorilla-fan.conf, created from a shipped default on first start (not
+   a dpkg conffile, because the service rewrites it). Saving: temporary file
+   and rename, other lines untouched.
+4. Window <-> service: one line of text over TCP on 127.0.0.1:47811
+   (STATE / SET / CALIBRATE). A Unix socket would be more usual on Linux;
+   TCP on loopback was chosen so the service and the window can run and be
+   tested on Windows too, with a simulated ThinkPad. Any local user can
+   change the mode, as with the Windows version, whose shared memory is open
+   to all users. Every value is range-checked; BIOS is a mode, not a manual
+   level; a Gorilla floor of 0 is refused.
+5. Safety: the kernel watchdog ("watchdog 120") hands the fan to the BIOS if
+   the service stops writing for 2 minutes; the service rewrites the current
+   level every 30 s to keep it fed. systemd's ExecStopPost runs
+   `gorilla-fan release` (level auto) however the service stops. Without
+   /proc/acpi/ibm/fan the service stays idle and never writes. Without
+   fan_control=1 it says so and tells how to fix it.
+6. "Measure fan speeds" button, which the Windows version lacks: each level
+   1-7 and full speed for 20 s, the last 5 readings averaged, the result saved
+   as FanLevelRpm=. Level 0 is recorded as 0 rpm and not run (it stops the
+   fan). The measurement stops, saving nothing, if a sensor passes
+   ManModeExit.
+7. Packaging, cross-built on Windows: cargo-zigbuild against glibc 2.28
+   (Debian 10 / RHEL 8 and newer), cargo-deb and cargo-generate-rpm. The
+   package ships /etc/modprobe.d/gorilla-fan.conf (fan_control=1), reloads
+   thinkpad_acpi if possible, enables and starts the service. The graphics
+   libraries are Recommends, not Depends, so the service can be installed on
+   a machine without a desktop.
+
+Problems met
+------------
+- Three borrow-checker errors: formatting a log message from the guarded
+  state while calling a method on the same guard. Fixed by formatting first.
+- Float literals passed to egui::Stroke::new warned under Rust 1.98
+  (future-incompatible f32 fallback). Fixed with _f32 suffixes.
+- cargo-deb refuses hard-coded cross paths (target/x86_64-unknown-linux-gnu/
+  release); it wants target/release and adjusts it itself.
+- cargo-generate-rpm scans the binary with ldd to list requirements. From
+  PowerShell there is no ldd and the build failed; from Git Bash an ldd ran
+  but cannot read a Linux binary, so it added nothing. Now auto-req = "no"
+  and the requirements are declared: glibc >= 2.28 (the highest symbol
+  version in the binary), systemd, kmod.
+- A test expectation of mine was wrong: at 56 C nothing in that curve steps
+  down (the 60 C level with hystDown 5 needs 55 C). Corrected to the upstream
+  behaviour, with a 55 C case added.
+- The window was too short: the Manual list was cut at the bottom edge.
+  Made taller (560 px). When the service is unreachable, State and Speed
+  showed "0 (Fan Level 0)", which reads like "fan off"; they now say
+  "unknown".
+
+Tests actually run
+------------------
+- cargo test: 15 of 15 pass (settings parsing including the owner's Windows
+  ini lines, key rewriting, level labels identical to Windows, Smart ramp and
+  hysteresis, Manual revert, BIOS hand-back, Gorilla bands, hysteresis, floor,
+  hot override, CPU-not-stuck-sensor, /proc parsing, protocol round trip and
+  value checks).
+- End to end on Windows with --simulate: the service logged "Change Mode from
+  BIOS->Smart", then Smart chose level 1 because the simulated stuck 'pwr'
+  sensor (66 C) was the hottest; clicking Gorilla saved "Active=4
+  GorillaTarget=45 GorillaFloor=5" and set level 7 at 49 C; the minimise
+  button turned bright blue on hover; "Measure fan speeds" ran 8 levels and
+  saved "FanLevelRpm=0 1765 2179 2586 2790 2999 3197 3423 3445" (the
+  simulator's L15 table); the lists then showed the same % labels as Windows;
+  Manual level 3 saved "Active=3 ManFanSpeed=3"; with the service stopped the
+  window said "The fan service is not reachable ... sudo systemctl start
+  gorilla-fan".
+- Linux binary: ELF x86-64, highest glibc symbol version GLIBC_2.28.
+- Packages opened and checked: .deb control fields, scripts 0755 with no CR,
+  files owned by root, /etc/modprobe.d/gorilla-fan.conf a conffile; .rpm
+  post/preun/postun scripts present, requires systemd and kmod, licence
+  Unlicense.
+
+Not tested
+----------
+- Nothing has run on Linux yet: not the binary, not the packages, not the
+  window under X11 or Wayland, not the maintainer scripts, not systemd.
+- Nothing has touched a real ThinkPad fan through thinkpad_acpi.
+- The kernel watchdog and ExecStopPost hand-back are untested.

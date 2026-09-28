@@ -45,6 +45,13 @@ Manual work exactly as upstream.**
   Intel/AMD Windows 10 (1809 or newer) or 11, installs the service, and
   on uninstall hands the fan back to the BIOS.
 
+- **A Linux version** (`linux/`, 0.1.0, pre-release): the same four modes and
+  the same window, as a systemd service using the kernel's `thinkpad_acpi`
+  driver, packaged as `.deb` and `.rpm`. See [linux/README.md](linux/README.md).
+
+What was done and why, in plain language and for developers, for both
+versions: [docs/](docs/README.md).
+
 Downloads are under [Releases](../../releases). Build the installer with
 Inno Setup 6: `ISCC installer\GorillaTPFanControl.iss`; the portable zip
 with `installer\build-portable.ps1`.
