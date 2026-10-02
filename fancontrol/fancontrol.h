@@ -132,6 +132,13 @@ protected:
 	// and full speed (0x40), from FanLevelRpm= in the ini; 0 = not measured.
 	int GorillaTarget;
 	int GorillaFloor;
+	// Compile mode (Gorilla fork, mode 5): the fan follows the LOAD and the rate of rise, not only the
+	// temperature already reached; never below level 4 while the mode is on. CompileTarget= in the ini.
+	int CompileTarget;
+	int LoadPct;                 // CPU load of the last sample interval, 0-100 (engine side)
+	int BusySamples;             // consecutive samples with LoadPct >= 60
+	int LastCpuTemp;             // the previous sample's CPU reading, for the rate of rise
+	unsigned long long LastIdleT, LastKernelT, LastUserT;   // GetSystemTimes of the previous sample
 	int FanLevelRpm[9];
 	int ReadErrorCount;
 	int MaxReadErrors;
@@ -206,6 +213,9 @@ protected:
 	void GorillaToDialog();                 // target + minimum -> combos
 	void GorillaFromDialog();               // combos -> members
 	void GorillaControl();                  // fan decision in mode 4
+	void CompileControl();                  // fan decision in mode 5 (Compile)
+	void SampleLoad();                      // LoadPct from GetSystemTimes deltas
+	void WriteStatusFile();                 // %ProgramData%\TPFanControl\status.txt, every sample, engine only
 
 	int ShowAllFromDialog();
 

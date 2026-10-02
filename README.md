@@ -156,6 +156,31 @@ The EC is reached through one of two port drivers, tried in this order
 To uninstall, disable **Start with Windows** in the menu (or run
 `TPFanControl.exe -u` as administrator) and delete the folder.
 
+## Compile mode (Firefox & kernel builds) - 2.5.1-gorilla.4
+
+A fifth mode, next to Gorilla. It exists because of 2026-10-02: a 77-minute
+twelve-thread Firefox compile ran with the fan pinned at level 4 (Manual) and the
+build harness reading a chassis zone that never moved; the laptop hit its
+hardware thermal reset. Linux throttles itself in the kernel; Windows does not,
+so the fan has to act on what is coming, not only on what has arrived:
+
+| condition | fan |
+|---|---|
+| CPU >= `CompileTarget`, any sensor above `ManModeExit`, or the CPU climbed 3 C since the last sample | full speed |
+| CPU within 10 C of the target, or load >= 60% for two samples | level 7 |
+| load >= 60% now, or CPU within 20 C of the target | level 5 |
+| otherwise | level 4 (never lower in this mode) |
+
+Full speed is held until 3 C below the target and level 7 while the load stays
+high, so it does not hunt. Load comes from `GetSystemTimes` deltas each sample.
+
+The engine also writes `%ProgramData%\TPFanControl\status.txt` every sample,
+rewritten atomically: `ts=..;mode=..;cpu=..;max=..;load=..;fan=0x..;rpm=..`.
+A build harness reads the EC `cpu` value from it instead of the window.
+
+Ini: `CompileTarget=70` (55-85). The window shows the mode as
+"Compile (Firefox & kernel)"; `Active=5` in the ini selects it at start.
+
 ## Building
 
 Visual Studio Build Tools with the C++ workload, toolset v145. From a

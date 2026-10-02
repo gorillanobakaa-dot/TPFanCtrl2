@@ -272,6 +272,12 @@ bool FANCONTROL::HandleData(void) {
 
 	sprintf_s(CurrentStatuscsv, sizeof(CurrentStatuscsv), "%s %s; %d; %d; ", templist, obuf2, State.FanCtrl, MaxTemp);
 
+	// Compile mode and the status file need the load and the EC reading every sample (engine only)
+	if (!g_clientMode) {
+		this->SampleLoad();
+		this->WriteStatusFile();
+	}
+
 	// a rewrite clears the selection, so the line could never be copied: hold it
 	// still while the user has clicked into it, and update again once they leave
 	if (::GetFocus() != ::GetDlgItem(this->hwndDialog, 8112))
@@ -325,6 +331,7 @@ bool FANCONTROL::HandleData(void) {
 		shared->smartLevel = this->IndSmartLevel;
 		shared->gorillaTarget = this->GorillaTarget;
 		shared->gorillaFloor = this->GorillaFloor;
+		shared->loadPct = this->LoadPct;
 		shared->fanCtrl = (unsigned char)this->State.FanCtrl;
 		shared->fan1lo = (unsigned char)this->State.Fan1SpeedLo;
 		shared->fan1hi = (unsigned char)this->State.Fan1SpeedHi;
@@ -422,13 +429,25 @@ bool FANCONTROL::HandleData(void) {
 
 	case 4: // Gorilla (Gorilla fork)
 		if (this->PreviousMode != this->CurrentMode) {
-			static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla" };
-			int pm = (this->PreviousMode >= 1 && this->PreviousMode <= 4) ? this->PreviousMode : 0;
+			static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
+			int pm = (this->PreviousMode >= 1 && this->PreviousMode <= 5) ? this->PreviousMode : 0;
 			sprintf_s(obuf, sizeof(obuf), "Change Mode from %s->Gorilla: keep the CPU at %d C, never below level %s",
 				names[pm], this->GorillaTarget, this->GorillaFloor == 64 ? "full" : std::to_string(this->GorillaFloor).c_str());
 			this->Trace(obuf);
 		}
 		this->GorillaControl();
+		ok = true;
+		break;
+
+	case 5: // Compile (Gorilla fork): Firefox and kernel builds
+		if (this->PreviousMode != this->CurrentMode) {
+			static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
+			int pm = (this->PreviousMode >= 1 && this->PreviousMode <= 5) ? this->PreviousMode : 0;
+			sprintf_s(obuf, sizeof(obuf), "Change Mode from %s->Compile: CPU target %d C, fan follows load and rate of rise, never below level 4",
+				names[pm], this->CompileTarget);
+			this->Trace(obuf);
+		}
+		this->CompileControl();
 		ok = true;
 		break;
 	}
@@ -487,6 +506,101 @@ void FANCONTROL::GorillaControl(void) {
 
 	if (want != cur)
 		this->SetFan("Gorilla", want);
+}
+
+//-------------------------------------------------------------------------
+//  Compile mode (Gorilla fork, mode 5): for Firefox and kernel builds
+//
+//  2026-10-02: a 77-minute 12-thread compile ran with the fan pinned at level
+//  4 and a build governor reading a chassis zone; the laptop hit its hardware
+//  trip. Linux's thermald would have reacted. This mode reacts to the LOAD and
+//  to the RATE of rise, not only to the temperature already reached:
+//
+//    CPU >= target, or MaxTemp > ManModeExit,
+//    or the CPU climbed >= 3 C since the last sample   full speed (0x40)
+//    CPU >= target - 10, or load >= 60% for 2 samples    level 7
+//    load >= 60% now, or CPU >= target - 20              level 5
+//    otherwise                                           level 4 (never lower)
+//
+//  Holds full speed until 3 C below the target and level 7 until 12 C below
+//  it while the load stays high, so it does not hunt. Steers by the CPU
+//  sensor (sensor 1) like Gorilla mode; the hottest sensor if it does not read.
+//-------------------------------------------------------------------------
+void FANCONTROL::CompileControl(void) {
+	int cpu = this->State.Sensors[0];
+	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
+	int target = this->CompileTarget;
+	int cur = this->State.FanCtrl;
+	bool hot = this->MaxTemp > this->ManModeExitInternal;
+	bool rising = this->LastCpuTemp > 0 && t - this->LastCpuTemp >= 3;
+	bool busy = this->LoadPct >= 60;
+	this->LastCpuTemp = t;
+
+	int want;
+	if (t >= target || hot || rising)                     want = 64;
+	else if (t >= target - 10 || this->BusySamples >= 2)  want = 7;
+	else if (busy || t >= target - 20)                    want = 5;
+	else                                                  want = 4;
+
+	if (!hot && !rising) {
+		if (want != 64 && cur == 64 && t > target - 3)
+			want = 64;                                  // hold full speed until 3 C below target
+		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && (t > target - 12 || busy))
+			want = 7;                                   // hold level 7 while hot-ish or still loaded
+	}
+	if (want != 64 && want < 4)
+		want = 4;
+
+	if (want == 64 && cur != 64 && this->fan1speed < 4000)
+		want = 7;                                       // spin up regulated first (as Smart)
+
+	if (want != cur)
+		this->SetFan("Compile", want);
+}
+
+//-------------------------------------------------------------------------
+//  CPU load of the last sample interval, from GetSystemTimes deltas (engine)
+//-------------------------------------------------------------------------
+void FANCONTROL::SampleLoad(void) {
+	FILETIME fi, fk, fu;
+	if (!::GetSystemTimes(&fi, &fk, &fu)) return;
+	unsigned long long idle = ((unsigned long long)fi.dwHighDateTime << 32) | fi.dwLowDateTime;
+	unsigned long long kern = ((unsigned long long)fk.dwHighDateTime << 32) | fk.dwLowDateTime;
+	unsigned long long user = ((unsigned long long)fu.dwHighDateTime << 32) | fu.dwLowDateTime;
+	if (this->LastKernelT) {
+		unsigned long long total = (kern - this->LastKernelT) + (user - this->LastUserT);
+		unsigned long long didle = idle - this->LastIdleT;
+		if (total > 0)
+			this->LoadPct = (int)(100 - (100 * didle) / total);   // kernel time includes idle time
+		this->BusySamples = this->LoadPct >= 60 ? this->BusySamples + 1 : 0;
+	}
+	this->LastIdleT = idle; this->LastKernelT = kern; this->LastUserT = user;
+}
+
+//-------------------------------------------------------------------------
+//  %ProgramData%\TPFanControl\status.txt: one line, rewritten atomically
+//  every sample by the engine, so a build harness has the EC cpu reading
+//  without the window: ts=..;mode=..;cpu=..;max=..;load=..;fan=0x..;rpm=..
+//-------------------------------------------------------------------------
+void FANCONTROL::WriteStatusFile(void) {
+	char dir[MAX_PATH] = "";
+	DWORD n = ::GetEnvironmentVariableA("ProgramData", dir, sizeof(dir));
+	if (n == 0 || n >= sizeof(dir)) return;
+	strcat_s(dir, sizeof(dir), "\\TPFanControl");
+	::CreateDirectoryA(dir, NULL);
+	char tmp[MAX_PATH], fin[MAX_PATH], line[256];
+	sprintf_s(tmp, sizeof(tmp), "%s\\status.txt.tmp", dir);
+	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
+	int cpu = this->State.Sensors[0];
+	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d\r\n",
+		(unsigned long)::GetTickCount64(), this->CurrentMode, (cpu > 0 && cpu < 128) ? cpu : -1, this->MaxTemp,
+		this->LoadPct, this->State.FanCtrl, this->fan1speed);
+	HANDLE h = ::CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h == INVALID_HANDLE_VALUE) return;
+	DWORD w = 0;
+	::WriteFile(h, line, (DWORD)strlen(line), &w, NULL);
+	::CloseHandle(h);
+	::MoveFileExA(tmp, fin, MOVEFILE_REPLACE_EXISTING);
 }
 
 //-------------------------------------------------------------------------

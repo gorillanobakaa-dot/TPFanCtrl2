@@ -197,6 +197,12 @@ FANCONTROL::ReadConfig(const char* configfile)
 				if ((v >= 1 && v <= 7) || v == 64) this->GorillaFloor = v;
 				continue;
 			}
+			// Compile mode (Gorilla fork): the CPU target for builds; out of range = default 70
+			if (_strnicmp(buf, "CompileTarget=", 14) == 0) {
+				int v = atoi(buf + 14);
+				if (v >= 55 && v <= 85) this->CompileTarget = v;
+				continue;
+			}
 			// FanLevelRpm=r0 r1 r2 r3 r4 r5 r6 r7 rFull : measured rpm per level
 			if (_strnicmp(buf, "FanLevelRpm=", 12) == 0) {
 				const char* p = buf + 12;
@@ -1070,7 +1076,7 @@ FANCONTROL::PersistUserMode(int mode, const char* levelText)
 	std::string vals[2] = { std::to_string(mode), std::to_string(level) };
 	if (!this->RewriteIniKeys(keys, vals, level >= 0 ? 2 : 1)) return;
 
-	static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla" };
+	static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
 	char msg[128];
 	if (mode == 3)
 		sprintf_s(msg, sizeof(msg), "Saved to TPFanControl.ini: Manual, level %d (used again after a restart)", level);

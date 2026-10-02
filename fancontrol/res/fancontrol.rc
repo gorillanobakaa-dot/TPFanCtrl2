@@ -50,6 +50,7 @@ BEGIN
     CONTROL         "Manual",8302,"Button",BS_AUTORADIOBUTTON,177,98,38,10
     COMBOBOX        8310,219,96,176,150,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Gorilla (cooling first)",8303,"Button",BS_AUTORADIOBUTTON,177,113,100,10
+    CONTROL         "Compile (Firefox && kernel)",8304,"Button",BS_AUTORADIOBUTTON,282,113,115,10
     LTEXT           "keep CPU at",8323,189,129,42,8
     COMBOBOX        8320,232,127,40,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "never slower than",8324,277,129,58,8
@@ -114,6 +115,7 @@ BEGIN
     CONTROL         "Manual",8302,"Button",BS_AUTORADIOBUTTON,177,98,38,10
     COMBOBOX        8310,219,96,176,150,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Gorilla (cooling first)",8303,"Button",BS_AUTORADIOBUTTON,177,113,100,10
+    CONTROL         "Compile (Firefox && kernel)",8304,"Button",BS_AUTORADIOBUTTON,282,113,115,10
     LTEXT           "keep CPU at",8323,189,129,42,8
     COMBOBOX        8320,232,127,40,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "never slower than",8324,277,129,58,8

@@ -99,6 +99,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
 	GorillaTarget(45),                           // CPU target, C (Gorilla fork)
 	GorillaFloor(5),                             // never below level 5 in Gorilla mode
+	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),
@@ -509,7 +510,8 @@ int FANCONTROL::CurrentModeFromDialog() {
 	BOOL modetpauto = ::SendDlgItemMessage(this->hwndDialog, 8300, BM_GETCHECK, 0L, 0L),
 		modefcauto = ::SendDlgItemMessage(this->hwndDialog, 8301, BM_GETCHECK, 0L, 0L),
 		modemanual = ::SendDlgItemMessage(this->hwndDialog, 8302, BM_GETCHECK, 0L, 0L),
-		modegorilla = ::SendDlgItemMessage(this->hwndDialog, 8303, BM_GETCHECK, 0L, 0L);
+		modegorilla = ::SendDlgItemMessage(this->hwndDialog, 8303, BM_GETCHECK, 0L, 0L),
+		modecompile = ::SendDlgItemMessage(this->hwndDialog, 8304, BM_GETCHECK, 0L, 0L);
 
 	if (modetpauto)
 		this->CurrentMode = 1;
@@ -519,6 +521,8 @@ int FANCONTROL::CurrentModeFromDialog() {
 		this->CurrentMode = 3;
 	else if (modegorilla)
 		this->CurrentMode = 4;
+	else if (modecompile)
+		this->CurrentMode = 5;
 	else
 		this->CurrentMode = -1;
 
@@ -544,6 +548,11 @@ void FANCONTROL::ModeToDialog(int mode) const {
 	::SendDlgItemMessage(this->hwndDialog, 8301, BM_SETCHECK, mode == 2, 0L);
 	::SendDlgItemMessage(this->hwndDialog, 8302, BM_SETCHECK, mode == 3, 0L);
 	::SendDlgItemMessage(this->hwndDialog, 8303, BM_SETCHECK, mode == 4, 0L);   // Gorilla
+	::SendDlgItemMessage(this->hwndDialog, 8304, BM_SETCHECK, mode == 5, 0L);   // Compile
+	::SetDlgItemText(this->hwndDialog, 8322, mode == 5
+		? "Compile: full speed at the CPU target or when the CPU climbs 3 C in a sample; level 7 as soon as the load stays"
+		  " above 60% or within 10 C of the target; never below level 4. For Firefox and kernel builds."
+		: "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.");
 }
 
 void FANCONTROL::ShowAllToDialog(int show) const {
