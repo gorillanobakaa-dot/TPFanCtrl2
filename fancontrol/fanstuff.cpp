@@ -416,7 +416,7 @@ bool FANCONTROL::HandleData(void) {
 		if (speedVal >= 0 && speedVal <= 255) {
 			// same staircase as smart mode: run 7 regulated until the fan is
 			// spun up, then disengage for the last few hundred rpm
-			if (speedVal == 64 && this->State.FanCtrl != 64 && this->fan1speed < 4000)
+			if (speedVal == 64 && this->State.FanCtrl != 64 && this->State.FanCtrl != 7 && this->fan1speed < 4000)
 				speedVal = 7;
 
 			if (this->State.FanCtrl != speedVal)
@@ -501,7 +501,7 @@ void FANCONTROL::GorillaControl(void) {
 	else if (want != 64 && want < floor)
 		want = floor;
 
-	if (want == 64 && cur != 64 && this->fan1speed < 4000)
+	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000)
 		want = 7;                                       // spin up regulated first (as Smart)
 
 	if (want != cur)
@@ -551,7 +551,7 @@ void FANCONTROL::CompileControl(void) {
 	if (want != 64 && want < 4)
 		want = 4;
 
-	if (want == 64 && cur != 64 && this->fan1speed < 4000)
+	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000)
 		want = 7;                                       // spin up regulated first (as Smart)
 
 	if (want != cur)
@@ -666,7 +666,9 @@ void FANCONTROL::SmartControl(void) {
 	// in disengaged mode the EC crawls up from its current duty, useless in an
 	// emergency; run 7 regulated until the fan is spun up, then top out on 64
 	// so the crawl only covers the last few hundred rpm
-	if (newfanctrl == 64 && fanctrl != 64 && this->fan1speed < 4000)
+	// Gorilla fork, gorilla.4: "spun up" is 4000 rpm OR one sample at level 7. An L15 Gen 3 tops out
+	// at ~3490 rpm, so with 4000 alone full speed never engaged (measured 2026-10-13: 90 C at level 7).
+	if (newfanctrl == 64 && fanctrl != 64 && fanctrl != 7 && this->fan1speed < 4000)
 		newfanctrl = 7;
 
 	if (newfanctrl != -1 && newfanctrl != this->State.FanCtrl) {
