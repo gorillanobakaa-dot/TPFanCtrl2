@@ -1068,7 +1068,8 @@ FANCONTROL::RewriteIniKeys(const char* const* keys, const std::string* values, i
 void
 FANCONTROL::PersistUserMode(int mode, const char* levelText)
 {
-	if (mode < 1 || mode > 4) return;                // never write Active=0 (read-only)
+	// never write Active=0 (read-only). 5 = Compile: it was refused here, so a Compile choice was never kept
+	if (mode < 1 || mode > 5) return;
 	int level = (mode == 3) ? ParseManualLevel(levelText) : -1;
 	if (mode == 3 && (level < 0 || level > 255)) return;   // unparsable level: keep the file as is
 

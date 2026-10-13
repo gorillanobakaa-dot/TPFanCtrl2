@@ -25,8 +25,9 @@
 #include "winstuff.h"
 #include "TaskbarTextIcon.h"
 
-constexpr const char* FANCONTROLVERSIONS = "2.5.1 Single Fan";
-constexpr const char* FANCONTROLVERSIOND = "2.5.1 Dual Fan";
+// the Gorilla build is in the title, so the owner can see which build runs (gorilla.4, 2026-10-13)
+constexpr const char* FANCONTROLVERSIONS = "2.5.1-gorilla.4 Single Fan";
+constexpr const char* FANCONTROLVERSIOND = "2.5.1-gorilla.4 Dual Fan";
 
 //Pipe name format - \\.\pipe\pipename
 #define g_szPipeName "\\\\.\\Pipe\\TPFanControl01"  //Name given to the pipe
@@ -142,6 +143,7 @@ protected:
 	int LastWant, LastT, LastPrev;
 	unsigned CtlCalls;
 	char LastWhy[16];
+	unsigned long long FullHoldUntil;   // Compile: full speed, once engaged, is held until this tick (30 s)
 	unsigned long long LastIdleT, LastKernelT, LastUserT;   // GetSystemTimes of the previous sample
 	int FanLevelRpm[9];
 	int ReadErrorCount;

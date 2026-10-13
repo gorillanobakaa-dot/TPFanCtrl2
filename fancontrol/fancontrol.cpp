@@ -99,7 +99,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
 	GorillaTarget(45),                           // CPU target, C (Gorilla fork)
 	GorillaFloor(5),                             // never below level 5 in Gorilla mode
-	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastWant(-1), LastT(0), LastPrev(0), CtlCalls(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
+	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastWant(-1), LastT(0), LastPrev(0), CtlCalls(0), FullHoldUntil(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),
@@ -549,10 +549,39 @@ void FANCONTROL::ModeToDialog(int mode) const {
 	::SendDlgItemMessage(this->hwndDialog, 8302, BM_SETCHECK, mode == 3, 0L);
 	::SendDlgItemMessage(this->hwndDialog, 8303, BM_SETCHECK, mode == 4, 0L);   // Gorilla
 	::SendDlgItemMessage(this->hwndDialog, 8304, BM_SETCHECK, mode == 5, 0L);   // Compile
-	::SetDlgItemText(this->hwndDialog, 8322, mode == 5
-		? "Compile: full speed at the CPU target or when the CPU climbs 3 C in a sample; level 7 as soon as the load stays"
-		  " above 60% or within 10 C of the target; never below level 4. For Firefox and kernel builds."
-		: "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.");
+
+	// The two boxes under Gorilla ("keep CPU at", "never slower than") are Gorilla's settings. In Compile mode they
+	// showed values Compile does not use (50 C / level 2 against its 70 C / level 4) and changing them edited
+	// Gorilla's settings (2026-10-13). Compile hides them and says its own values in the text, which gets their row.
+	static RECT home = { 0, 0, 0, 0 };          // the description's place in the dialog template, client pixels
+	HWND desc = ::GetDlgItem(this->hwndDialog, 8322), row = ::GetDlgItem(this->hwndDialog, 8323);
+	if (desc && !home.right) {
+		::GetWindowRect(desc, &home);
+		::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&home, 2);
+	}
+	for (int id : { 8320, 8321, 8323, 8324 })
+		::ShowWindow(::GetDlgItem(this->hwndDialog, id), mode == 5 ? SW_HIDE : SW_SHOW);
+	if (desc && row && home.right) {
+		RECT r = home;
+		if (mode == 5) {
+			RECT rr;
+			::GetWindowRect(row, &rr);
+			::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&rr, 2);
+			r.top = rr.top;
+		}
+		::SetWindowPos(desc, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+	}
+	char text[400];
+	if (mode == 5)
+		sprintf_s(text, sizeof(text), "Compile (Firefox and kernel builds) keeps the CPU at %d C (CompileTarget in "
+			"TPFanControl.ini). Full speed at %d C, on a 3 C jump in one sample, or when any sensor is hot, then held "
+			"for at least 30 s. Level 7 under sustained load or within 10 C of %d C. Never below level 4.",
+			this->CompileTarget, this->CompileTarget, this->CompileTarget);
+	else
+		sprintf_s(text, sizeof(text), "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the "
+			"minimum. Noise is not a factor.");
+	::SetDlgItemText(this->hwndDialog, 8322, text);
+	::InvalidateRect(this->hwndDialog, NULL, TRUE);
 }
 
 void FANCONTROL::ShowAllToDialog(int show) const {
@@ -1362,8 +1391,9 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 		this->UpdateTempDisplay();
 	}
 
-	// mode radios (8300-8303), the Manual level (8310), Gorilla target/minimum (8320/8321)
-	if ((cmd >= 8300 && cmd <= 8303) || cmd == 8310 || cmd == 8320 || cmd == 8321) {
+	// mode radios (8300-8304; 8304 = Compile, unhandled before 2026-10-13), the Manual level (8310),
+	// Gorilla target/minimum (8320/8321)
+	if ((cmd >= 8300 && cmd <= 8304) || cmd == 8310 || cmd == 8320 || cmd == 8321) {
 		if ((cmd == 8310 || cmd == 8320 || cmd == 8321) && HIWORD(mp1) != CBN_SELCHANGE)
 			return 0;                            // act on a picked entry, not on keystrokes
 		if (cmd == 8310)
@@ -1371,6 +1401,8 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 		if (cmd == 8320 || cmd == 8321)
 			this->ModeToDialog(4);               // picking a Gorilla setting means Gorilla
 		this->GorillaFromDialog();
+		if (cmd >= 8300 && cmd <= 8304)
+			this->ModeToDialog(this->CurrentModeFromDialog());   // the panel follows the click at once
 		// the item's value, not its label (CBN_SELCHANGE comes before the text updates)
 		char level[16] = "";
 		int lv = this->LevelFromCombo(8310);

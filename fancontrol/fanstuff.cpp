@@ -299,7 +299,7 @@ bool FANCONTROL::HandleData(void) {
 
 		if (shared->cmdSmart == 0 || shared->cmdSmart == 1)
 			this->SwitchSmartLevel(shared->cmdSmart);
-		else if (shared->cmdMode >= 1 && shared->cmdMode <= 4) {
+		else if (shared->cmdMode >= 1 && shared->cmdMode <= 5) {      // 5 = Compile (was refused from the window)
 			// an empty box would parse as level 0, the fan off
 			if (shared->cmdMode == 3 && shared->cmdLevelText[0]) {
 				char* end = NULL;
@@ -549,6 +549,14 @@ void FANCONTROL::CompileControl(void) {
 		want = 5; why = busy ? "busy" : "warm"; }
 	else {
 		want = 4; why = "floor"; }
+
+	// Full speed, once engaged, is held for at least 30 s unless the CPU is far below the target. Without it a
+	// spiky load hunted: +5 C -> full, 62 C -> level 7, +8 C -> full ... every 5 s (owner's log, 2026-10-13 01:50).
+	unsigned long long now = ::GetTickCount64();
+	if (want == 64)
+		this->FullHoldUntil = now + 30000;
+	else if (now < this->FullHoldUntil && t > target - 20) {
+		want = 64; why = "hold30"; }
 
 	if (!hot && !rising) {
 		if (want != 64 && cur == 64 && t > target - 3) {
