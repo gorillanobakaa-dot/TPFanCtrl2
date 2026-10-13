@@ -395,6 +395,9 @@ void FANCONTROL::SetupTaskbarAndTimers() {
 	::EnableWindow(::GetDlgItem(this->hwndDialog, 8320), this->ActiveMode);
 	::EnableWindow(::GetDlgItem(this->hwndDialog, 8321), this->ActiveMode);
 
+	// every mode's description measured against its box once at start; the log says if one would be cut off
+	this->CheckDescriptions();
+
 	// make it call HandleControl initially
 	::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
 
@@ -552,36 +555,92 @@ void FANCONTROL::ModeToDialog(int mode) const {
 
 	// The two boxes under Gorilla ("keep CPU at", "never slower than") are Gorilla's settings. In Compile mode they
 	// showed values Compile does not use (50 C / level 2 against its 70 C / level 4) and changing them edited
-	// Gorilla's settings (2026-10-13). Compile hides them and says its own values in the text, which gets their row.
-	static RECT home = { 0, 0, 0, 0 };          // the description's place in the dialog template, client pixels
-	HWND desc = ::GetDlgItem(this->hwndDialog, 8322), row = ::GetDlgItem(this->hwndDialog, 8323);
-	if (desc && !home.right) {
+	// Gorilla's settings (2026-10-13). Compile hides them; its text says its own values and gets their row.
+	for (int id : { 8320, 8321, 8323, 8324 })
+		::ShowWindow(::GetDlgItem(this->hwndDialog, id), mode == 5 ? SW_HIDE : SW_SHOW);
+	this->PlaceDescription(mode, true, NULL, NULL);
+	::InvalidateRect(this->hwndDialog, NULL, TRUE);
+}
+
+void FANCONTROL::ModeText(int mode, char* buf, size_t n) const {
+	switch (mode) {
+	case 1:
+		sprintf_s(buf, n, "BIOS: the laptop's own controller decides, as if this program were not running. Quiet, "
+			"but it lets the CPU get hot before the fan reacts.");
+		break;
+	case 2:
+		sprintf_s(buf, n, "Smart: steps the fan up and down by temperature, from the table in TPFanControl.ini. "
+			"The original program's balance of noise and cooling.");
+		break;
+	case 3:
+		sprintf_s(buf, n, "Manual: the fan stays at the level you pick, whatever the temperature. If any sensor "
+			"reaches %d C it switches to Smart to protect the laptop.", this->ManModeExitInternal);
+		break;
+	case 5:
+		sprintf_s(buf, n, "Compile, for long Firefox and kernel builds: reacts to load and to rising heat, not only "
+			"to temperature. Target %d C (CompileTarget in TPFanControl.ini). Full speed at the target, on a 3 C jump "
+			"or when a sensor is hot, then held at least 30 s; level 7 under sustained load; never below level 4.",
+			this->CompileTarget);
+		break;
+	default:
+		sprintf_s(buf, n, "Gorilla, for everyday use: keeps the CPU at the target you pick below and never runs "
+			"slower than the minimum you pick. Full speed at the target, level 7 within 5 C of it. Cooling first; "
+			"noise is not a factor.");
+	}
+}
+
+// The description's box: from its template top (in Compile, from the hidden Gorilla row) down to just above the
+// groups' bottom edge. Measures the text with the box's own font and width: false when it would be cut off.
+bool FANCONTROL::PlaceDescription(int mode, bool apply, int* need, int* have) const {
+	static RECT home = { 0, 0, 0, 0 };           // the description's place in the dialog template, client pixels
+	HWND desc = ::GetDlgItem(this->hwndDialog, 8322), row = ::GetDlgItem(this->hwndDialog, 8323),
+		group = ::GetDlgItem(this->hwndDialog, 9201);    // the log group: same bottom edge as this one
+	if (!desc) return true;
+	if (!home.right) {
 		::GetWindowRect(desc, &home);
 		::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&home, 2);
 	}
-	for (int id : { 8320, 8321, 8323, 8324 })
-		::ShowWindow(::GetDlgItem(this->hwndDialog, id), mode == 5 ? SW_HIDE : SW_SHOW);
-	if (desc && row && home.right) {
-		RECT r = home;
-		if (mode == 5) {
-			RECT rr;
-			::GetWindowRect(row, &rr);
-			::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&rr, 2);
-			r.top = rr.top;
-		}
-		::SetWindowPos(desc, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+	RECT r = home;
+	if (mode == 5 && row) {
+		RECT rr;
+		::GetWindowRect(row, &rr);
+		::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&rr, 2);
+		r.top = rr.top;
 	}
-	char text[400];
-	if (mode == 5)
-		sprintf_s(text, sizeof(text), "Compile (Firefox and kernel builds) keeps the CPU at %d C (CompileTarget in "
-			"TPFanControl.ini). Full speed at %d C, on a 3 C jump in one sample, or when any sensor is hot, then held "
-			"for at least 30 s. Level 7 under sustained load or within 10 C of %d C. Never below level 4.",
-			this->CompileTarget, this->CompileTarget, this->CompileTarget);
-	else
-		sprintf_s(text, sizeof(text), "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the "
-			"minimum. Noise is not a factor.");
-	::SetDlgItemText(this->hwndDialog, 8322, text);
-	::InvalidateRect(this->hwndDialog, NULL, TRUE);
+	if (group) {
+		RECT g;
+		::GetWindowRect(group, &g);
+		::MapWindowPoints(NULL, this->hwndDialog, (POINT*)&g, 2);
+		if (g.bottom - 6 > r.bottom) r.bottom = g.bottom - 6;
+	}
+	char text[512];
+	this->ModeText(mode, text, sizeof(text));
+	HDC dc = ::GetDC(desc);
+	HFONT f = (HFONT)::SendMessage(desc, WM_GETFONT, 0, 0);
+	HGDIOBJ old = f ? ::SelectObject(dc, f) : NULL;
+	RECT calc = { 0, 0, r.right - r.left, 0 };
+	::DrawTextA(dc, text, -1, &calc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EXPANDTABS);
+	if (old) ::SelectObject(dc, old);
+	::ReleaseDC(desc, dc);
+	if (need) *need = calc.bottom;
+	if (have) *have = r.bottom - r.top;
+	if (apply) {
+		::SetWindowPos(desc, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+		::SetWindowTextA(desc, text);
+	}
+	return calc.bottom <= r.bottom - r.top;
+}
+
+void FANCONTROL::CheckDescriptions() {
+	static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
+	for (int m = 1; m <= 5; m++) {
+		int need = 0, have = 0;
+		bool ok = this->PlaceDescription(m, false, &need, &have);
+		char line[200];
+		sprintf_s(line, sizeof(line), "UI check: %s description %s (text %d px, box %d px)", names[m],
+			ok ? "fits" : "DOES NOT FIT", need, have);
+		this->Trace(line);
+	}
 }
 
 void FANCONTROL::ShowAllToDialog(int show) const {

@@ -226,6 +226,9 @@ protected:
 	int ShowAllFromDialog();
 
 	void ModeToDialog(int mode) const;
+	void ModeText(int mode, char* buf, size_t n) const;        // what each mode does, in plain words
+	bool PlaceDescription(int mode, bool apply, int* need, int* have) const;   // fits? (pixels)
+	void CheckDescriptions();                // start-up: every mode's text measured, the result logged
 
 	void ShowAllToDialog(int mode) const;
 
