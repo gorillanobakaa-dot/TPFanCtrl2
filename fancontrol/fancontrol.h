@@ -144,6 +144,7 @@ protected:
 	unsigned CtlCalls;
 	char LastWhy[16];
 	unsigned long long FullHoldUntil;   // Compile: full speed, once engaged, is held until this tick (30 s)
+	unsigned long long LastRaiseTick;   // Compile: when the fan last went UP; it steps down only 30 s later
 	unsigned long long LastIdleT, LastKernelT, LastUserT;   // GetSystemTimes of the previous sample
 	int FanLevelRpm[9];
 	int ReadErrorCount;
