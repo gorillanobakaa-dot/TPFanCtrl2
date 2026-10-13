@@ -534,25 +534,35 @@ void FANCONTROL::CompileControl(void) {
 	bool hot = this->MaxTemp > this->ManModeExitInternal;
 	bool rising = this->LastCpuTemp > 0 && t - this->LastCpuTemp >= 3;
 	bool busy = this->LoadPct >= 60;
+	this->LastPrev = this->LastCpuTemp;
+	this->LastT = t;
 	this->LastCpuTemp = t;
+	this->CtlCalls++;
+	const char* why;
 
 	int want;
-	if (t >= target || hot || rising)                     want = 64;
-	else if (t >= target - 10 || this->BusySamples >= 2)  want = 7;
-	else if (busy || t >= target - 20)                    want = 5;
-	else                                                  want = 4;
+	if (t >= target || hot || rising) {
+		want = 64; why = hot ? "hot" : (t >= target ? "target" : "rise"); }
+	else if (t >= target - 10 || this->BusySamples >= 2) {
+		want = 7; why = t >= target - 10 ? "near" : "busy2"; }
+	else if (busy || t >= target - 20) {
+		want = 5; why = busy ? "busy" : "warm"; }
+	else {
+		want = 4; why = "floor"; }
 
 	if (!hot && !rising) {
-		if (want != 64 && cur == 64 && t > target - 3)
-			want = 64;                                  // hold full speed until 3 C below target
-		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && (t > target - 12 || busy))
-			want = 7;                                   // hold level 7 while hot-ish or still loaded
+		if (want != 64 && cur == 64 && t > target - 3) {
+			want = 64; why = "hold64"; }                // hold full speed until 3 C below target
+		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && (t > target - 12 || busy)) {
+			want = 7; why = "hold7"; }                  // hold level 7 while hot-ish or still loaded
 	}
 	if (want != 64 && want < 4)
 		want = 4;
 
-	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000)
-		want = 7;                                       // spin up regulated first (as Smart)
+	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000) {
+		want = 7; why = "stair"; }                      // spin up regulated first (as Smart)
+	this->LastWant = want;
+	strcpy_s(this->LastWhy, sizeof(this->LastWhy), why);
 
 	if (want != cur)
 		this->SetFan("Compile", want);
@@ -592,9 +602,11 @@ void FANCONTROL::WriteStatusFile(void) {
 	sprintf_s(tmp, sizeof(tmp), "%s\\status.txt.tmp", dir);
 	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
 	int cpu = this->State.Sensors[0];
-	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d\r\n",
+	// want/why/t/prev/n: the LAST Compile-mode decision (this line is written before this cycle decides)
+	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u\r\n",
 		(unsigned long)::GetTickCount64(), this->CurrentMode, (cpu > 0 && cpu < 128) ? cpu : -1, this->MaxTemp,
-		this->LoadPct, this->State.FanCtrl, this->fan1speed);
+		this->LoadPct, this->State.FanCtrl, this->fan1speed, this->LastWant & 0xff, this->CtlCalls ? this->LastWhy : "none",
+		this->LastT, this->LastPrev, this->CtlCalls);
 	HANDLE h = ::CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (h == INVALID_HANDLE_VALUE) return;
 	DWORD w = 0;

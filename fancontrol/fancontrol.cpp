@@ -99,7 +99,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
 	GorillaTarget(45),                           // CPU target, C (Gorilla fork)
 	GorillaFloor(5),                             // never below level 5 in Gorilla mode
-	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
+	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastWant(-1), LastT(0), LastPrev(0), CtlCalls(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),

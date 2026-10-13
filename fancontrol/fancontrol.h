@@ -138,6 +138,10 @@ protected:
 	int LoadPct;                 // CPU load of the last sample interval, 0-100 (engine side)
 	int BusySamples;             // consecutive samples with LoadPct >= 60
 	int LastCpuTemp;             // the previous sample's CPU reading, for the rate of rise
+	// the last Compile-mode decision, written to status.txt so a test reads the engine's own reasoning
+	int LastWant, LastT, LastPrev;
+	unsigned CtlCalls;
+	char LastWhy[16];
 	unsigned long long LastIdleT, LastKernelT, LastUserT;   // GetSystemTimes of the previous sample
 	int FanLevelRpm[9];
 	int ReadErrorCount;
