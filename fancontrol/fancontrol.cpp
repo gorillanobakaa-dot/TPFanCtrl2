@@ -632,7 +632,11 @@ bool FANCONTROL::PlaceDescription(int mode, bool apply, int* need, int* have) co
 }
 
 void FANCONTROL::CheckDescriptions() {
+	// Measured in THIS window (its session, its screen scaling) and written where a test can read it whatever the
+	// log setting: %LOCALAPPDATA%\TPFanControl\ui-check.txt, rewritten at every start (TPFanControl.log exists
+	// only with Log2File=1, so the first test of this check found nothing, 2026-10-13).
 	static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
+	std::string all;
 	for (int m = 1; m <= 5; m++) {
 		int need = 0, have = 0;
 		bool ok = this->PlaceDescription(m, false, &need, &have);
@@ -640,6 +644,20 @@ void FANCONTROL::CheckDescriptions() {
 		sprintf_s(line, sizeof(line), "UI check: %s description %s (text %d px, box %d px)", names[m],
 			ok ? "fits" : "DOES NOT FIT", need, have);
 		this->Trace(line);
+		all += line;
+		all += "\r\n";
+	}
+	char dir[MAX_PATH] = "";
+	DWORD n = ::GetEnvironmentVariableA("LOCALAPPDATA", dir, sizeof(dir));
+	if (n == 0 || n >= sizeof(dir) - 32) return;
+	strcat_s(dir, sizeof(dir), "\\TPFanControl");
+	::CreateDirectoryA(dir, NULL);
+	char path[MAX_PATH];
+	sprintf_s(path, sizeof(path), "%s\\ui-check.txt", dir);
+	FILE* f = NULL;
+	if (fopen_s(&f, path, "wb") == 0 && f) {
+		fwrite(all.data(), 1, all.size(), f);
+		fclose(f);
 	}
 }
 
