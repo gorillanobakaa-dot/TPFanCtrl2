@@ -577,10 +577,10 @@ void FANCONTROL::ModeText(int mode, char* buf, size_t n) const {
 			"reaches %d C it switches to Smart to protect the laptop.", this->ManModeExitInternal);
 		break;
 	case 5:
-		sprintf_s(buf, n, "Compile, for long Firefox and kernel builds: reacts to load and to rising heat, not only "
-			"to temperature. Target %d C (CompileTarget in TPFanControl.ini). Full speed at the target, on a 3 C jump "
-			"or when a sensor is hot, then held at least 30 s; level 7 under sustained load; never below level 4.",
-			this->CompileTarget);
+		sprintf_s(buf, n, "Compile, for long Firefox and kernel builds: the fan speeds up on load and on rising heat, "
+			"never below level 4, and runs at full speed from %d C (it does not hold the CPU there). A fan alone cannot "
+			"cap the heat: for a build that never passes %d C, also run fieldkit thermal watch --target %d.",
+			this->CompileTarget, this->CompileTarget, this->CompileTarget - 3);
 		break;
 	default:
 		sprintf_s(buf, n, "Gorilla, for everyday use: keeps the CPU at the target you pick below and never runs "
