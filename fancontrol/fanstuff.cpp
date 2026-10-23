@@ -573,10 +573,12 @@ void FANCONTROL::CompileControl(void) {
 	// Up at once, down only 30 s after the last raise. A build's load comes in pulses (one job ends, the next
 	// starts); stepping down at once made the fan follow every pulse: 4, 5, 7, 4 ... 11 changes in a minute in the
 	// bursty test (2026-10-13). Rank: levels 0-7, full speed (64) above them.
+	// No exception for a cool CPU: with one (t < target - 30) a bursty load at 36-38 C went 4, 7, 4 every pulse,
+	// 9 changes in a minute (2026-10-23). Holding a faster level 30 s more costs noise, never heat.
 	auto rank = [](int v) { return v == 64 ? 8 : (v & 0x80 ? -1 : v); };
 	if (rank(want) > rank(cur))
 		this->LastRaiseTick = now;
-	else if (rank(want) < rank(cur) && now - this->LastRaiseTick < 30000 && !(t < target - 30)) {
+	else if (rank(want) < rank(cur) && now - this->LastRaiseTick < 30000) {
 		want = cur; why = "holddn"; }
 	this->LastWant = want;
 	strcpy_s(this->LastWhy, sizeof(this->LastWhy), why);
