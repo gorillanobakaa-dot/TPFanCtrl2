@@ -26,8 +26,8 @@
 #include "TaskbarTextIcon.h"
 
 // the Gorilla build is in the title, so the owner can see which build runs (gorilla.4, 2026-10-13)
-constexpr const char* FANCONTROLVERSIONS = "2.5.1-gorilla.4 Single Fan";
-constexpr const char* FANCONTROLVERSIOND = "2.5.1-gorilla.4 Dual Fan";
+constexpr const char* FANCONTROLVERSIONS = "2.5.1-gorilla.5 Single Fan";
+constexpr const char* FANCONTROLVERSIOND = "2.5.1-gorilla.5 Dual Fan";
 
 //Pipe name format - \\.\pipe\pipename
 #define g_szPipeName "\\\\.\\Pipe\\TPFanControl01"  //Name given to the pipe
@@ -198,6 +198,7 @@ protected:
 	LONG LastCmdSeq;    // engine: last client command acted on
 	LONG LastStateSeq;  // client: last engine publication drawn
 	LONG LastTraceSeq;  // client: last engine log line mirrored
+	unsigned SpeedTicks = 0;   // gorilla.5: the 500 ms timer's count; the speed line moves every 2nd tick
 	BOOL Closing;
 	MUTEXSEM EcAccess;
 	bool m_needClose;
@@ -222,6 +223,10 @@ protected:
 	void GorillaControl();                  // fan decision in mode 4
 	void CompileControl();                  // fan decision in mode 5 (Compile)
 	void SampleLoad();                      // LoadPct from GetSystemTimes deltas
+	bool GuardHold();                       // fieldkit guard runs a heavy job: full speed (gorilla.5)
+	bool ReadFanSpeedOnly();                // engine: the fan's rpm alone, every second (gorilla.5)
+	void PullFanSpeed();                    // client: the engine's latest rpm, every second
+	void ShowFanSpeed();                    // the "Gorilla Fan speed" line
 	void WriteStatusFile();                 // %ProgramData%\TPFanControl\status.txt, every sample, engine only
 
 	int ShowAllFromDialog();

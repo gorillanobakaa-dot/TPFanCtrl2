@@ -172,18 +172,18 @@ bool FANCONTROL::HandleData(void) {
 	if (this->fan2speed > 0x1fff)
 		fan2speed = lastfan2speed;
 
-	if(SingleFan)
-		sprintf_s(obuf2, sizeof(obuf2), "%d RPM", this->fan1speed);
-	else
-		sprintf_s(obuf2, sizeof(obuf2), "%d/%d RPM", this->fan1speed, this->fan2speed);
+	this->ShowFanSpeed();
 
-	::SetDlgItemText(this->hwndDialog, 8102, obuf2);
-
-	// display temperature list
+	// Switch: the temperature the mode decides on. Gorilla and Compile steer by the CPU sensor; the hottest
+	// sensor here can be one that never moves (the L15 Gen 3's "pwr" sits at 66 C), which looked like the fan's
+	// reason while it was not (owner's screenshot, 2026-10-27)
+	int shown = this->MaxTemp;
+	if ((this->CurrentMode == 4 || this->CurrentMode == 5) && this->State.Sensors[0] > 0 && this->State.Sensors[0] < 128)
+		shown = this->State.Sensors[0];
 	if (Fahrenheit)
-		sprintf_s(obuf2, sizeof(obuf2), "%d° F", this->MaxTemp * 9 / 5 + 32);
+		sprintf_s(obuf2, sizeof(obuf2), "%d° F", shown * 9 / 5 + 32);
 	else
-		sprintf_s(obuf2, sizeof(obuf2), "%d° C", this->MaxTemp);
+		sprintf_s(obuf2, sizeof(obuf2), "%d° C", shown);
 
 	::SetDlgItemText(this->hwndDialog, 8103, obuf2);
 
@@ -496,7 +496,7 @@ void FANCONTROL::GorillaControl(void) {
 		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && t > target - 7)
 			want = 7;                                   // hold level 7 until 2 C below its band
 	}
-	if (floor == 64)
+	if (floor == 64 || this->GuardHold())
 		want = 64;
 	else if (want != 64 && want < floor)
 		want = floor;
@@ -540,8 +540,13 @@ void FANCONTROL::CompileControl(void) {
 	this->CtlCalls++;
 	const char* why;
 
+	// gorilla.5 (crash 2026-10-27 ~17:10): the fan sat at level 4 as a guarded commit started, because the EC
+	// reading lags the die. fieldkit guard now says a heavy job runs (guard-hold.txt): full speed for all of it.
+	bool guard = this->GuardHold();
 	int want;
-	if (t >= target || hot || rising) {
+	if (guard) {
+		want = 64; why = "guard"; }
+	else if (t >= target || hot || rising) {
 		want = 64; why = hot ? "hot" : (t >= target ? "target" : "rise"); }
 	else if (t >= target - 10 || this->BusySamples >= 2) {
 		want = 7; why = t >= target - 10 ? "near" : "busy2"; }
@@ -558,7 +563,7 @@ void FANCONTROL::CompileControl(void) {
 	else if (now < this->FullHoldUntil && t > target - 20) {
 		want = 64; why = "hold30"; }
 
-	if (!hot && !rising) {
+	if (!hot && !rising && !guard) {
 		if (want != 64 && cur == 64 && t > target - 3) {
 			want = 64; why = "hold64"; }                // hold full speed until 3 C below target
 		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && (t > target - 12 || busy)) {
@@ -580,6 +585,14 @@ void FANCONTROL::CompileControl(void) {
 		this->LastRaiseTick = now;
 	else if (rank(want) < rank(cur) && now - this->LastRaiseTick < 30000) {
 		want = cur; why = "holddn"; }
+	else if (rank(want) < rank(cur) && rank(cur) >= 0) {
+		// gorilla.5: down ONE step at a time, 30 s apart: full -> 7 -> 5 -> 4. Straight from full speed to level 4
+		// meant the next pulse of a build started from 2,775 rpm (owner's log, 2026-10-27 17:20: 0x40 -> 0x04)
+		int step = cur == 64 ? 7 : (cur >= 6 ? 5 : 4);
+		if (rank(step) > rank(want)) {
+			want = step; why = "stepdn"; }
+		this->LastRaiseTick = now;                      // the next step down waits another 30 s
+	}
 	this->LastWant = want;
 	strcpy_s(this->LastWhy, sizeof(this->LastWhy), why);
 
@@ -604,6 +617,77 @@ void FANCONTROL::SampleLoad(void) {
 		this->BusySamples = this->LoadPct >= 60 ? this->BusySamples + 1 : 0;
 	}
 	this->LastIdleT = idle; this->LastKernelT = kern; this->LastUserT = user;
+}
+
+//-------------------------------------------------------------------------
+//  gorilla.5: %ProgramData%\TPFanControl\guard-hold.txt exists while fieldkit guard runs a heavy job
+//  (fieldkit/thermal/brake.py writes it; the last job out, or the machine governor, removes it). A stale file
+//  only keeps the fan fast.
+//-------------------------------------------------------------------------
+bool FANCONTROL::GuardHold(void) {
+	char path[MAX_PATH] = "";
+	DWORD n = ::GetEnvironmentVariableA("ProgramData", path, sizeof(path));
+	if (n == 0 || n >= sizeof(path)) return false;
+	strcat_s(path, sizeof(path), "\\TPFanControl\\guard-hold.txt");
+	return ::GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+//-------------------------------------------------------------------------
+//  gorilla.5, the "Gorilla Fan speed" line (owner, 2026-10-27: "it shows the speed fan in real time so the user
+//  can make an informed decision"): rpm, the share of full speed measured for this laptop (FanLevelRpm), and the
+//  level the fan control set. The engine reads the rpm alone every second (ReadFanSpeedOnly); a client takes it
+//  from the shared state (PullFanSpeed).
+//-------------------------------------------------------------------------
+void FANCONTROL::ShowFanSpeed(void) {
+	char buf[128], lvl[24];
+	int fc = this->State.FanCtrl & 0xff;
+	if (fc == 0x40) strcpy_s(lvl, sizeof(lvl), "full speed");
+	else if (fc & 0x80) strcpy_s(lvl, sizeof(lvl), "BIOS decides");
+	else sprintf_s(lvl, sizeof(lvl), "level %d", fc & 0x07);
+	int full = 0;
+	for (int k = 0; k < 9; k++) if (this->FanLevelRpm[k] > full) full = this->FanLevelRpm[k];
+	if (!SingleFan)
+		sprintf_s(buf, sizeof(buf), "%d / %d rpm  (%s)", this->fan1speed, this->fan2speed, lvl);
+	else if (full > 0)
+		sprintf_s(buf, sizeof(buf), "%d rpm  =  %d%% of full  (%s)", this->fan1speed,
+			(this->fan1speed * 100 + full / 2) / full, lvl);
+	else
+		sprintf_s(buf, sizeof(buf), "%d rpm  (%s)", this->fan1speed, lvl);
+	::SetDlgItemText(this->hwndDialog, 8102, buf);
+}
+
+bool FANCONTROL::ReadFanSpeedOnly(void) {
+	if (!this->EcAccess.Lock(50))
+		return false;                                   // the full read or another tool has the EC: next second
+	char lo = 0, hi = 0, lo2 = 0, hi2 = 0;
+	bool ok = this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN1)
+		&& this->ReadByteFromEC(TP_ECOFFSET_FANSPEED, &lo) && this->ReadByteFromEC(TP_ECOFFSET_FANSPEED + 1, &hi)
+		&& this->ReadByteFromEC(TP_ECOFFSET_FANSPEED, &lo2) && this->ReadByteFromEC(TP_ECOFFSET_FANSPEED + 1, &hi2);
+	this->FreeECAccess();
+	int rpm = ((unsigned char)hi << 8) | (unsigned char)lo;
+	if (!ok || lo != lo2 || hi != hi2 || rpm > 0x1fff)
+		return false;                                   // two equal readings, as ReadEcStatus demands
+	this->State.Fan1SpeedLo = lo;
+	this->State.Fan1SpeedHi = hi;
+	this->fan1speed = rpm;
+	FCSHARED* shared = SharedState();
+	if (shared) {
+		shared->fan1lo = (unsigned char)lo;
+		shared->fan1hi = (unsigned char)hi;
+	}
+	return true;
+}
+
+void FANCONTROL::PullFanSpeed(void) {
+	FCSHARED* shared = SharedState();
+	if (!shared)
+		return;
+	this->State.Fan1SpeedLo = (char)shared->fan1lo;
+	this->State.Fan1SpeedHi = (char)shared->fan1hi;
+	this->State.FanCtrl = (char)shared->fanCtrl;
+	int rpm = ((shared->fan1hi & 0xff) << 8) | (shared->fan1lo & 0xff);
+	if (rpm <= 0x1fff)
+		this->fan1speed = rpm;
 }
 
 //-------------------------------------------------------------------------

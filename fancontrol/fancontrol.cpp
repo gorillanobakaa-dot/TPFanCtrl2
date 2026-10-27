@@ -577,10 +577,10 @@ void FANCONTROL::ModeText(int mode, char* buf, size_t n) const {
 			"reaches %d C it switches to Smart to protect the laptop.", this->ManModeExitInternal);
 		break;
 	case 5:
-		sprintf_s(buf, n, "Compile, for long Firefox and kernel builds: the fan speeds up on load and on rising heat, "
-			"never below level 4, and runs at full speed from %d C (it does not hold the CPU there). A fan alone cannot "
-			"cap the heat: for a build that never passes %d C, also run fieldkit thermal watch --target %d.",
-			this->CompileTarget, this->CompileTarget, this->CompileTarget - 3);
+		sprintf_s(buf, n, "Compile, for heavy work: full speed for the whole of every fieldkit guard job, otherwise "
+			"full speed from %d C or on a fast rise, never below level 4, and down one step at a time. The fan cannot "
+			"cap the heat: fieldkit thermal watch (started at logon) lowers the CPU cap above %d C.",
+			this->CompileTarget, this->CompileTarget);
 		break;
 	default:
 		sprintf_s(buf, n, "Gorilla, for everyday use: keeps the CPU at the target you pick below and never runs "
@@ -1231,6 +1231,14 @@ ULONG FANCONTROL::OnTimer(WPARAM timerId) {
 	}
 
 	case 2: { // update window title
+		// gorilla.5: the "Gorilla Fan speed" line, once a second (the full EC read stays at Cycle seconds)
+		if (++this->SpeedTicks % 2 == 0) {
+			if (g_clientMode)
+				this->PullFanSpeed();
+			else
+				this->ReadFanSpeedOnly();
+			this->ShowFanSpeed();
+		}
 		if (this->CurrentMode == 3 && this->MaxTemp > this->ManModeExitInternal) {
 			this->ModeToDialog(2);
 			::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
