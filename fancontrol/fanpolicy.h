@@ -33,3 +33,17 @@ inline CompileDemand CompileFanDemand(int temp, int target, bool hot, bool risin
 	if (temp >= target - 20) return {5, "warm"};
 	return {4, "floor"};
 }
+
+inline int DecodePackageTemperature(unsigned long long target, unsigned long long status) {
+	int tjMax = (target >> 16) & 0xff;
+	int delta = (status >> 16) & 0x7f;
+	if (!(status & (1ULL << 31)) || tjMax < 60 || tjMax > 125 || delta >= tjMax) return -1;
+	return tjMax - delta;
+}
+
+inline int CoolingTemperature(int ec, int package, unsigned long long ecAt,
+                              unsigned long long packageAt, unsigned long long now) {
+	if (ec <= 0 || ec >= 128 || package <= 0 || package > 125 ||
+	    !ecAt || !packageAt || now - ecAt > 5000 || now - packageAt > 5000) return -1;
+	return ec > package ? ec : package;
+}

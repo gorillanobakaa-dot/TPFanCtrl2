@@ -199,6 +199,7 @@ FANCONTROL::ReadConfig(const char* configfile)
 
 			// Gorilla mode (Gorilla fork). Out-of-range values are ignored: the
 			// floor must be a running level, so a typo cannot stop the fan.
+			if (_strnicmp(buf, "RequireIntelPackage=1", 21) == 0) packageRequired = true;
 			if (_strnicmp(buf, "GorillaTarget=", 14) == 0) {
 				int v = atoi(buf + 14);
 				if (v >= 30 && v <= 70) this->GorillaTarget = v;

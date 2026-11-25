@@ -57,6 +57,12 @@ bool FANCONTROL::HandleData(void) {
 			list[i] = '|';
 	}
 
+	if (packageRequired && !g_clientMode) {
+		packageAt = GetTickCount64();
+		packageC = PortAccess_ReadIntelPackage();
+	}
+	steeringC = packageRequired ? CoolingTemperature(State.Sensors[0], packageC, State.ecAt,
+	                                                  packageAt, GetTickCount64()) : State.Sensors[0];
 	rawSafetyTemp = 0;
 	maxtemp = 0;
 	imaxtemp = 0;
@@ -118,6 +124,10 @@ bool FANCONTROL::HandleData(void) {
 		}
 	}
 
+	if (packageRequired && steeringC > maxtemp) {
+		maxtemp = steeringC;
+		imaxtemp = packageC > State.Sensors[0] ? 12 : 0;
+	}
 	this->MaxTemp = maxtemp;
 	this->iMaxTemp = imaxtemp;
 
@@ -182,7 +192,7 @@ bool FANCONTROL::HandleData(void) {
 	// reason while it was not (owner's screenshot, 2026-10-27)
 	int shown = this->MaxTemp;
 	if ((this->CurrentMode == 4 || this->CurrentMode == 5) && this->State.Sensors[0] > 0 && this->State.Sensors[0] < 128)
-		shown = this->State.Sensors[0];
+		shown = steeringC;
 	if (Fahrenheit)
 		sprintf_s(obuf2, sizeof(obuf2), "%d° F", shown * 9 / 5 + 32);
 	else
@@ -195,6 +205,12 @@ bool FANCONTROL::HandleData(void) {
 	for (i = 0; i < 12; i++) {
 		int temp = this->State.Sensors[i];
 
+		if (packageRequired && i && !ShowAll) continue;
+		if (packageRequired && i) {
+			sprintf_s(obuf2, "EC[0x%02x] raw %u\r\n", State.SensorAddr[i], temp);
+			strcat_s(templist2, obuf2);
+			continue;
+		}
 		if (temp != 0 && temp < 128) {
 			if (Fahrenheit)
 				sprintf_s(obuf2, sizeof(obuf2), "%d° F", temp * 9 / 5 + 32);
@@ -224,12 +240,17 @@ bool FANCONTROL::HandleData(void) {
 		}
 	}
 
+	if (packageRequired) {
+		if (steeringC > 0) sprintf_s(obuf2, "Intel Package %d C\r\n", packageC);
+		else strcpy_s(obuf2, "Intel Package n/a\r\n");
+		strcat_s(templist2, obuf2);
+	}
 	if (SlimDialog)
 		::SetDlgItemText(this->hwndDialog, 8101, templist2);
 	else
 		this->UpdateTempDisplay();
 
-	this->icontemp = this->State.Sensors[iMaxTemp];
+	this->icontemp = iMaxTemp == 12 ? packageC : this->State.Sensors[iMaxTemp];
 
 	// compact single line status (combined)
 	strcpy_s(templist, sizeof(templist), "");
@@ -335,7 +356,7 @@ bool FANCONTROL::HandleData(void) {
 	}
 	if (CurrentMode >= 2 && CurrentMode <= 5) {
 		int cpu = static_cast<unsigned char>(State.Sensors[0]);
-		if (cpu == 0 || cpu >= 128 || SensorErratic[0] || MaxTemp <= 0)
+		if ((packageRequired && CoolingTemperature(cpu, packageC, State.ecAt, packageAt, GetTickCount64()) < 0) || cpu == 0 || cpu >= 128 || SensorErratic[0] || MaxTemp <= 0)
 			return false;
 	}
 	const unsigned level = static_cast<unsigned char>(State.FanCtrl);
@@ -481,8 +502,13 @@ bool FANCONTROL::HandleData(void) {
 		shared->fan1hi = (unsigned char)this->State.Fan1SpeedHi;
 		shared->fan2lo = (unsigned char)this->State.Fan2SpeedLo;
 		shared->fan2hi = (unsigned char)this->State.Fan2SpeedHi;
-		for (i = 0; i < 12; i++)
-			shared->sensors[i] = (unsigned char)this->State.Sensors[i];
+		shared->packageC = packageC;
+		shared->ecAt = State.ecAt;
+		shared->packageAt = packageAt;
+		for (i = 0; i < 12; i++) {
+			shared->sensorAddr[i] = State.SensorAddr[i];
+			shared->sensors[i] = State.Sensors[i];
+		}
 		::InterlockedIncrement(&shared->stateSeq);
 	}
 
@@ -509,7 +535,7 @@ bool FANCONTROL::HandleData(void) {
 //-------------------------------------------------------------------------
 bool FANCONTROL::GorillaControl(void) {
 	int cpu = this->State.Sensors[0];
-	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
+	int t = steeringC;
 	int target = this->GorillaTarget;
 	int floor = this->GorillaFloor;
 	int cur = this->State.FanCtrl;
@@ -542,7 +568,7 @@ bool FANCONTROL::GorillaControl(void) {
 //-------------------------------------------------------------------------
 bool FANCONTROL::CompileControl(void) {
 	int cpu = this->State.Sensors[0];
-	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
+	int t = steeringC;
 	int target = this->CompileTarget;
 	int cur = this->State.FanCtrl;
 	bool hot = (__max(cpu, __max(this->MaxTemp, rawSafetyTemp)) >= this->ManModeExitInternal);
@@ -694,15 +720,15 @@ void FANCONTROL::WriteStatusFile(void) {
 	if (n == 0 || n >= sizeof(dir)) return;
 	strcat_s(dir, sizeof(dir), "\\TPFanControl");
 	::CreateDirectoryA(dir, NULL);
-	char tmp[MAX_PATH], fin[MAX_PATH], line[256];
+	char tmp[MAX_PATH], fin[MAX_PATH], line[512];
 	sprintf_s(tmp, sizeof(tmp), "%s\\status.txt.tmp", dir);
 	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
 	int cpu = this->State.Sensors[0];
-	// want/why/t/prev/n: the LAST Compile-mode decision (this line is written before this cycle decides)
-	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u;fault=%d;bios_verified=%d;sample_ok=%d\r\n",
+	// Keep the original fields for harnesses and include both measured inputs.
+	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u;fault=%d;bios_verified=%d;sample_ok=%d;ec_c=%d;ec_ms=%llu;package_c=%d;package_ms=%llu;steer_c=%d\r\n",
 		(unsigned long)::GetTickCount64(), this->CurrentMode, (cpu > 0 && cpu < 128) ? cpu : -1, this->MaxTemp,
 		this->LoadPct, this->State.FanCtrl, this->fan1speed, this->LastWant & 0xff, this->CtlCalls ? this->LastWhy : "none",
-		this->LastT, this->LastPrev, this->CtlCalls, coolingFault, biosConfirmed, ReadErrorCount == 0);
+		this->LastT, this->LastPrev, this->CtlCalls, coolingFault, biosConfirmed, ReadErrorCount == 0 && (!packageRequired || steeringC > 0), cpu, State.ecAt, packageC, packageAt, steeringC);
 	HANDLE h = ::CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (h == INVALID_HANDLE_VALUE) return;
 	DWORD w = 0;
@@ -799,6 +825,8 @@ void FANCONTROL::RecoverCooling(const char* reason) {
 	FCSHARED* shared = SharedState();
 	if (shared) {
 		shared->mode = 1;
+		shared->packageC = -1;
+		shared->packageAt = 0;
 		shared->fanCtrl = static_cast<unsigned char>(State.FanCtrl);
 		shared->ackSeq = shared->cmdSeq;
 		::InterlockedIncrement(&shared->stateSeq);
@@ -1134,6 +1162,7 @@ bool FANCONTROL::ReadEcRaw(FCSTATE* pfcstate) {
 		pfcstate->Fan2SpeedHi = pfcstate->Fan1SpeedHi;
 	}
 
+	pfcstate->ecAt = GetTickCount64();
 	// Get Sensors finally
 
 	int i, idxtemp, ok = TRUE;
