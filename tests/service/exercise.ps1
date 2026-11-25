@@ -74,7 +74,7 @@ try {
     Expect 'BIOS startup' {param($s) $s.mode -eq '1' -and $s.fan -eq '0x80'}
     $tray = Start-Process -FilePath $app -WorkingDirectory $runtime -WindowStyle Hidden -PassThru
     Expect 'tray attached while service owns fan' {param($s) !$tray.HasExited -and
-        (Select-String "$runtime/TPFanControl.log" -SimpleMatch 'running as a client' -Quiet)}
+        (Select-String -LiteralPath "$runtime/TPFanControl.log" -SimpleMatch -Pattern 'running as a client' -Quiet)}
     Stop-Process -Id $tray.Id
     Stop-Engine
 
@@ -129,7 +129,7 @@ try {
     Start-Mode 4 0
     Expect 'invalid CPU startup' {param($s) $s.cpu -eq '-1' -and $s.fault -eq '1' -and $s.fan -eq '0x80'}
     Stop-Engine
-    if (Select-String "$runtime/register-writes.csv" -SimpleMatch ',0x31,' -Quiet) {throw 'Unexpected single-fan bank write'}
+    if (Select-String -LiteralPath "$runtime/register-writes.csv" -SimpleMatch -Pattern ',0x31,' -Quiet) {throw 'Unexpected single-fan bank write'}
     'OK no single-fan bank writes' | Tee-Object -FilePath "$out/checks.txt" -Append
 } finally {
     if ($tray -and !$tray.HasExited) { Stop-Process -Id $tray.Id -ErrorAction SilentlyContinue }
