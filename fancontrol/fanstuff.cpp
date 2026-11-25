@@ -286,6 +286,11 @@ bool FANCONTROL::HandleData(void) {
 	else
 		sprintf_s(CurrentStatus, sizeof(CurrentStatus), "Fan: 0x%02x / Switch: %d° C (%s)", State.FanCtrl, MaxTemp, templist);
 
+	if (packageRequired) {
+		char packageText[24] = "unavailable";
+		if (steeringC > 0) sprintf_s(packageText, "%d C", packageC);
+		sprintf_s(CurrentStatus, "Fan 0x%02x / EC[0x78] %u C / Intel Package %s", State.FanCtrl, State.Sensors[0], packageText);
+	}
 	// display fan speed
 
 	if (fan1speed > 0x1fff)

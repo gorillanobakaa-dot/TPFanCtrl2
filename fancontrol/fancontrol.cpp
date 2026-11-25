@@ -249,7 +249,7 @@ void FANCONTROL::InitDialogWindow() {
 				lvc.cx = w0; lvc.pszText = (LPSTR)"#"; ListView_InsertColumn(hLV, 0, &lvc);
 				lvc.cx = w1; lvc.pszText = (LPSTR)"Name"; ListView_InsertColumn(hLV, 1, &lvc);
 				lvc.cx = w2; lvc.pszText = (LPSTR)"Temp"; ListView_InsertColumn(hLV, 2, &lvc);
-				lvc.cx = cw - w0 - w1 - w2; lvc.pszText = (LPSTR)"EC"; ListView_InsertColumn(hLV, 3, &lvc);
+				lvc.cx = cw - w0 - w1 - w2; lvc.pszText = (LPSTR)"Addr"; ListView_InsertColumn(hLV, 3, &lvc);
 			}
 		}
 
@@ -2114,11 +2114,11 @@ FANCONTROL::UpdateTempDisplay(void)
 		lvi.iSubItem = 0;
 		lvi.pszText = (LPSTR)"DTS";
 		int row = ListView_InsertItem(hLV, &lvi);
-		ListView_SetItemText(hLV, row, 1, (LPSTR)"Intel Package");
+		ListView_SetItemText(hLV, row, 1, (LPSTR)"Package");
 		if (steeringC > 0) sprintf_s(buf, "%d %s", Fahrenheit ? packageC * 9 / 5 + 32 : packageC, Fahrenheit ? "F" : "C");
 		else strcpy_s(buf, "n/a");
 		ListView_SetItemText(hLV, row, 2, buf);
-		ListView_SetItemText(hLV, row, 3, (LPSTR)"MSR 0x1B1");
+		ListView_SetItemText(hLV, row, 3, (LPSTR)"0x1B1");
 	}
 	int count = ListView_GetItemCount(hLV);
 	if (topIndex > 0 && count > 0)
