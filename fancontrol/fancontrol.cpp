@@ -477,31 +477,10 @@ void FANCONTROL::HandleModernStandbyEvent(EVT_HANDLE hEvent) {
 		std::wstring xml(buffer.data());
 
 		if (xml.find(L"<EventID>506</EventID>") != std::wstring::npos) {
-			this->isModernS0State = true;
-			this->Trace("Detected Modern S0 Entry");
-			this->savedMode = this->CurrentMode;
-
-			if (this->ModernS0Mode == 1) {
-				this->ModeToDialog(1);
-				if (this->SetFan("Switched to BIOS mode", 0x80)) ::Sleep(1000);
-			}
-			else if (this->ModernS0Mode == 2 || this->ModernS0Mode >= 4) {
-				this->Trace("Continuing current mode");
-			}
-			else if (this->ModernS0Mode == 3) {
-				this->ModeToDialog(3);
-				if (this->SetFan("Switched fans off and to manual mode", 0x00))	::Sleep(1000);
-			}
+			::PostMessage(hwndDialog, WM_POWERBROADCAST, PBT_APMSUSPEND, 0);
 		}
 		else if (xml.find(L"<EventID>507</EventID>") != std::wstring::npos) {
-			this->isModernS0State = false;
-			this->Trace("Detected Modern S0 Exit, defer access to EC (10s)");
-			::Sleep(10000);
-
-			if (this->savedMode != -1 && this->savedMode != this->CurrentMode) {
-				this->ModeToDialog(this->savedMode);
-				this->Trace("Restored saved mode");
-			}
+			::PostMessage(hwndDialog, WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC, 0);
 		}
 	}
 }
@@ -955,6 +934,7 @@ int FANCONTROL::LevelFromCombo(int comboId) {
 	char text[32] = "";
 	::GetWindowTextA(cb, text, sizeof(text));
 	char* end = NULL;
+	if (comboId == 8310) return ParseManualLevel(text);
 	long v = strtol(text, &end, 0);
 	return end == text ? -1 : (int)v;
 }
@@ -1110,7 +1090,7 @@ ULONG FANCONTROL::DlgProc(HWND hwnd, ULONG msg, WPARAM mp1, LPARAM mp2) {
 		// a client has no port access, so it hands the change to the engine
 		if (g_clientMode)
 			this->SendCommand(-1);
-		else if (!this->hThread && !this->FinalSeen)
+		else if (!this->hThread && !this->FinalSeen && !isPowerSuspendState && !m_needClose)
 			this->hThread = this->CreateThread(FANCONTROL_Thread, (ULONG)this);
 		break;
 
@@ -1216,6 +1196,7 @@ ULONG FANCONTROL::OnTimer(WPARAM timerId) {
 		return 0;
 	}
 
+	if (m_needClose) { TryClose(); return 0; }
 	switch (timerId) {
 	case 1: // update fan state
 	{
@@ -1235,8 +1216,7 @@ ULONG FANCONTROL::OnTimer(WPARAM timerId) {
 		if (++this->SpeedTicks % 2 == 0) {
 			if (g_clientMode)
 				this->PullFanSpeed();
-			else
-				this->ReadFanSpeedOnly();
+			// The engine displays RPM from its periodic sample without extra EC traffic.
 			this->ShowFanSpeed();
 		}
 		if (this->CurrentMode == 3 && this->MaxTemp > this->ManModeExitInternal) {
@@ -1610,27 +1590,25 @@ ULONG FANCONTROL::OnCommand(WPARAM mp1) {
 //-------------------------------------------------------------------------
 ULONG FANCONTROL::OnPowerBroadcast(WPARAM mp1, LPARAM mp2) {
 	if (mp1 == PBT_APMSUSPEND) {
-		this->isPowerSuspendState = true;
-		this->savedMode = this->CurrentMode;
-		this->Trace("System suspend detected");
-
-		if (this->PowerSuspendMode == 4) {
-			this->ModeToDialog(3);
-			if (this->SetFan("Switched fans off and to manual mode", 0x00)) ::Sleep(1000);
-		}
+		if (isPowerSuspendState) return TRUE;
+		isPowerSuspendState = true;
+		discardWorkerSample = hThread != NULL;
+		savedMode = CurrentModeFromDialog();
+		ModeToDialog(1);
+		if (!g_clientMode && ActiveMode && !SetFan("Suspend firmware handback", 0x80))
+			RecoverCooling("Suspend handback failed");
 	}
 	else if (mp1 == PBT_APMRESUMEAUTOMATIC) {
-		this->isPowerSuspendState = false;
-		this->Trace("System resume detected");
-
-		if (this->PowerSuspendMode == 4) {
-			if (this->savedMode != -1 && this->savedMode != this->CurrentMode) {
-				::Sleep(5000);
-				this->ModeToDialog(this->savedMode);
-				::Sleep(1000);
-				this->Trace("Restored saved mode");
-			}
-		}
+		if (!isPowerSuspendState) return TRUE;
+		isPowerSuspendState = false;
+		startupChecked = false;
+		monitoredLevel = -1;
+		noRotationSince = lastCompileSample = 0;
+		LastCpuTemp = BusySamples = 0;
+		PreviousMode = 1;
+		if (!coolingFault && savedMode >= 1 && savedMode <= 5)
+			ModeToDialog(savedMode);
+		::PostMessage(hwndDialog, WM__GETDATA, 0, 0);
 	}
 	else if (mp1 == PBT_POWERSETTINGCHANGE) {
 		POWERBROADCAST_SETTING* pbs = (POWERBROADCAST_SETTING*)mp2;
@@ -1644,7 +1622,8 @@ ULONG FANCONTROL::OnPowerBroadcast(WPARAM mp1, LPARAM mp2) {
 
 				if (this->PowerSuspendMode == 1) {
 					this->ModeToDialog(1);
-					if (this->SetFan("Switched to BIOS mode", 0x80)) ::Sleep(1000);
+					if (!g_clientMode && ActiveMode && !SetFan("Closed lid firmware handback", 0x80))
+						RecoverCooling("Closed lid handback failed");
 				}
 				else if (this->PowerSuspendMode == 2 || this->PowerSuspendMode >= 5) {
 					this->Trace("Continuing current mode");
@@ -1658,8 +1637,9 @@ ULONG FANCONTROL::OnPowerBroadcast(WPARAM mp1, LPARAM mp2) {
 					}
 				}
 				else if (this->PowerSuspendMode == 3) {
-					this->ModeToDialog(3);
-					if (this->SetFan("Switched fans off and to manual mode", 0x00)) ::Sleep(1000);
+					this->ModeToDialog(1);
+					if (!g_clientMode && ActiveMode && !SetFan("Closed lid firmware handback", 0x80))
+						RecoverCooling("Closed lid handback failed");
 				}
 				else if (this->PowerSuspendMode == 4) {
 					// Defer to PBT_APMSUSPEND/PBT_APMRESUMEAUTOMATIC handling
@@ -1714,39 +1694,26 @@ ULONG FANCONTROL::OnNewData(WPARAM mp1) {
 		this->hThread = 0;
 	}
 
-	ULONG ok = mp1;  // equivalent of "ok = this->ReadEcStatus(&this->State);" via thread
-
-	if (ok) {
-		this->ReadErrorCount = 0;
-		this->HandleData();
-
-		if (m_needClose) {
-			this->Trace("Program needs to be closed, changing to BIOS mode");
-			::Sleep(1000);
-			::PostMessage(this->hwndDialog, WM_COMMAND, 5020, 0);
-			::SendMessage(this->hwndDialog, WM_ENDSESSION, 0, 0);
-			m_needClose = false;
-		}
+	if (m_needClose) {
+		TryClose();
+		return 0;
 	}
-	else {
-		char buf[1024];
-		sprintf_s(buf, sizeof(buf), "Warning: can't read Status, read error count = %d", this->ReadErrorCount);
-		this->Trace(buf);
-		sprintf_s(buf, sizeof(buf), "We will close to BIOS-Mode after %d consecutive read errors", this->MaxReadErrors);
-		this->Trace(buf);
-		this->ReadErrorCount++;
-
-		// after so many consecutive read errors, try to switch back to bios mode
-		if (this->ReadErrorCount > this->MaxReadErrors) {
-			this->ModeToDialog(1);
-			ok = this->SetFan("Max. Errors", 0x80);
-			if (ok) {
-				this->Trace("Set to BIOS Mode, to many consecutive read errors");
-				::Sleep(2000);
-				::SendMessage(this->hwndDialog, WM_ENDSESSION, 0, 0);
-			}
-		}
+	if (discardWorkerSample) {
+		discardWorkerSample = false;
+		if (!isPowerSuspendState) ::PostMessage(hwndDialog, WM__GETDATA, 0, 0);
+		return 0;
 	}
+	if (isPowerSuspendState) return 0;
+	if (mp1) {
+		ReadErrorCount = 0;
+		bool applied = HandleData();
+		if (!g_clientMode && ActiveMode && !applied)
+			RecoverCooling("Invalid cooling sample or fan command failed");
+	} else if (!g_clientMode && ActiveMode) {
+		++ReadErrorCount;
+		RecoverCooling("EC sample failed");
+	}
+	if (!g_clientMode) WriteStatusFile();
 
 	return 0;
 }
@@ -1875,10 +1842,10 @@ ULONG FANCONTROL::OnTaskbarNotify(LPARAM mp2) {
 //  attempt graceful shutdown: set fan to BIOS, kill timers, dismiss dialog
 //-------------------------------------------------------------------------
 bool FANCONTROL::TryClose() {
-	// Wait for the work thread to terminate
-	if (this->hThread) {
-		::WaitForSingleObject(this->hThread, INFINITE);
-	}
+	// The worker may be sending text to this dialog. Keep pumping messages
+	// until its completion message arrives instead of joining it here.
+	m_needClose = true;
+	if (hThread) return false;
 
 	if (!this->EcAccess.Lock(100)) {
 		// Something is going on, let's do this later
@@ -1894,7 +1861,6 @@ bool FANCONTROL::TryClose() {
 		::KillTimer(this->hwndDialog, m_titleTimer);
 		::KillTimer(this->hwndDialog, m_iconTimer);
 		::KillTimer(this->hwndDialog, m_renewTimer);
-		BOOL CloHT = CloseHandle(this->hThread);
 		this->Trace("Exiting ProcessDialog");
 		this->EcAccess.Unlock();
 		::PostMessage(this->hwndDialog, WM__DISMISSDLG, IDCANCEL, 0); // exit from ProcessDialog()

@@ -1,0 +1,21 @@
+name: Fan control
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  ec-transaction:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build-tests --config Debug
+      - run: ctest --test-dir build-tests -C Debug --output-on-failure
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
+          & $msbuild fancontrol/fancontrol.sln /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143
+          exit $LASTEXITCODE

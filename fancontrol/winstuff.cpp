@@ -75,6 +75,10 @@ MUTEXSEM::Lock(int millies) {
 	int ok = FALSE;
 
 	int rc = this->hmux ? ::WaitForSingleObject(this->hmux, millies) : WAIT_FAILED;
+	if (rc == WAIT_ABANDONED) {
+		::ReleaseMutex(hmux);
+		return FALSE;
+	}
 	ok = rc == WAIT_OBJECT_0;  // returns posted TRUE/FALSE
 
 	return ok;

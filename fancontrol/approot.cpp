@@ -366,7 +366,7 @@ VOID WINAPI ServiceMain(DWORD aArgc, LPTSTR* aArgv) {
 
     g_SvcStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     g_SvcStatus.dwCurrentState = SERVICE_START_PENDING;
-    g_SvcStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
+    g_SvcStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_POWEREVENT;
     g_SvcStatus.dwWin32ExitCode = NO_ERROR;
     g_SvcStatus.dwServiceSpecificExitCode = NO_ERROR;
     g_SvcStatus.dwCheckPoint = 0;
@@ -385,12 +385,23 @@ VOID WINAPI ServiceMain(DWORD aArgc, LPTSTR* aArgv) {
 
 DWORD WINAPI Handler(DWORD fdwControl, DWORD evtType, LPVOID evtData, LPVOID ctx) {
     switch(fdwControl) {
+       case SERVICE_CONTROL_POWEREVENT:
+            if (evtType == PBT_APMSUSPEND || evtType == PBT_APMRESUMEAUTOMATIC) {
+                if (g_dialogWnd) PostMessage(g_dialogWnd, WM_POWERBROADCAST, evtType, 0);
+            }
+            break;
+       case SERVICE_CONTROL_SHUTDOWN:
        case SERVICE_CONTROL_STOP:
             g_SvcStatus.dwCurrentState = SERVICE_STOP_PENDING;
             g_SvcStatus.dwWaitHint = 20000;
             SetServiceStatus(g_SvcHandle, &g_SvcStatus);
 
-            StopWorkerThread();
+            if (!StopWorkerThread()) {
+                g_SvcStatus.dwCurrentState = SERVICE_RUNNING;
+                g_SvcStatus.dwWaitHint = 0;
+                SetServiceStatus(g_SvcHandle, &g_SvcStatus);
+                return ERROR_TIMEOUT;
+            }
                 
             g_SvcStatus.dwCurrentState = SERVICE_STOPPED;
             g_SvcStatus.dwWaitHint = 0;

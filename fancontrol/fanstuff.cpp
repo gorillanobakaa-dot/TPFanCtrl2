@@ -17,6 +17,7 @@
 
 #include "_prec.h"
 #include "fancontrol.h"
+#include "fanpolicy.h"
 #include "tools.h"
 #include "portaccess.h"
 #include "sharedstate.h"
@@ -42,7 +43,7 @@ bool FANCONTROL::HandleData(void) {
 		 manlevel[16] = "",
 		 title2[128] = "";
 	int i, maxtemp, imaxtemp;
-	bool ok = 0;
+	bool ok = true;
 
 	//
 	// determine highest temp.
@@ -56,6 +57,7 @@ bool FANCONTROL::HandleData(void) {
 			list[i] = '|';
 	}
 
+	rawSafetyTemp = 0;
 	maxtemp = 0;
 	imaxtemp = 0;
 	int senstemp;
@@ -95,6 +97,7 @@ bool FANCONTROL::HandleData(void) {
 					continue;
 			}
 
+			if (isens < 128) rawSafetyTemp = __max(rawSafetyTemp, isens);
 			int ioffs = this->SensorOffset[i].offs;
 
 			// do not apply offset if inside of temp range
@@ -275,7 +278,7 @@ bool FANCONTROL::HandleData(void) {
 	// Compile mode and the status file need the load and the EC reading every sample (engine only)
 	if (!g_clientMode) {
 		this->SampleLoad();
-		this->WriteStatusFile();
+
 	}
 
 	// a rewrite clears the selection, so the line could never be copied: hold it
@@ -294,20 +297,18 @@ bool FANCONTROL::HandleData(void) {
 
 	// a client leaves the user's choice here for the engine to act on
 	FCSHARED* shared = SharedState();
-	if (shared && shared->cmdSeq != this->LastCmdSeq) {
+	int requestedMode = -1;
+	if (!coolingFault && shared && shared->cmdSeq != this->LastCmdSeq) {
 		this->LastCmdSeq = shared->cmdSeq;
 
 		if (shared->cmdSmart == 0 || shared->cmdSmart == 1)
 			this->SwitchSmartLevel(shared->cmdSmart);
 		else if (shared->cmdMode >= 1 && shared->cmdMode <= 5) {      // 5 = Compile (was refused from the window)
 			// an empty box would parse as level 0, the fan off
-			if (shared->cmdMode == 3 && shared->cmdLevelText[0]) {
-				char* end = NULL;
-				long lv = strtol(shared->cmdLevelText, &end, 0);
-				if (end != shared->cmdLevelText)
-					this->SelectLevelInCombo(8310, (int)lv);
-				else
-					::SetDlgItemText(this->hwndDialog, 8310, shared->cmdLevelText);
+			if (shared->cmdMode == 3) {
+				int level = ParseManualLevel(shared->cmdLevelText);
+				if (level < 0) return false;
+				this->SelectLevelInCombo(8310, level);
 			}
 			// Gorilla settings travel with every command (-1 = unchanged)
 			if (shared->cmdGorillaTarget >= 30 && shared->cmdGorillaTarget <= 70)
@@ -316,30 +317,53 @@ bool FANCONTROL::HandleData(void) {
 				this->GorillaFloor = shared->cmdGorillaFloor;
 			this->GorillaToDialog();
 			this->ModeToDialog(shared->cmdMode);
-			// the engine owns the config file: remember the client's choice here
-			this->PersistUserMode(shared->cmdMode, shared->cmdLevelText);
-			if (shared->cmdMode == 4)
-				this->PersistGorilla(this->GorillaTarget, this->GorillaFloor);
+			requestedMode = shared->cmdMode;
 		}
 	}
 
 	this->CurrentModeFromDialog();
-
-	if (shared) {
-		shared->ackSeq = this->LastCmdSeq;
-		shared->mode = this->CurrentMode;
-		shared->smartLevel = this->IndSmartLevel;
-		shared->gorillaTarget = this->GorillaTarget;
-		shared->gorillaFloor = this->GorillaFloor;
-		shared->loadPct = this->LoadPct;
-		shared->fanCtrl = (unsigned char)this->State.FanCtrl;
-		shared->fan1lo = (unsigned char)this->State.Fan1SpeedLo;
-		shared->fan1hi = (unsigned char)this->State.Fan1SpeedHi;
-		shared->fan2lo = (unsigned char)this->State.Fan2SpeedLo;
-		shared->fan2hi = (unsigned char)this->State.Fan2SpeedHi;
-		for (i = 0; i < 12; i++)
-			shared->sensors[i] = (unsigned char)this->State.Sensors[i];
-		::InterlockedIncrement(&shared->stateSeq);
+	if (coolingFault) {
+		this->ModeToDialog(1);
+		this->CurrentMode = 1;
+		if (!biosConfirmed || State.FanCtrl != 0x80)
+			return false;
+	}
+	if (!coolingFault && !startupChecked && ActiveMode) {
+		startupChecked = true;
+		if (State.FanCtrl != 0x80)
+			return false; // unknown previous owner: latch the fault and verify BIOS
+	}
+	if (CurrentMode >= 2 && CurrentMode <= 5) {
+		int cpu = static_cast<unsigned char>(State.Sensors[0]);
+		if (cpu == 0 || cpu >= 128 || SensorErratic[0] || MaxTemp <= 0)
+			return false;
+	}
+	const unsigned level = static_cast<unsigned char>(State.FanCtrl);
+	const int rpm1 = (State.Fan1SpeedHi << 8) | State.Fan1SpeedLo;
+	const int rpm2 = (State.Fan2SpeedHi << 8) | State.Fan2SpeedLo;
+	const ULONGLONG sampledAt = GetTickCount64();
+	if (monitoredLevel != static_cast<int>(level)) {
+		monitoredLevel = level;
+		levelSince = sampledAt;
+	}
+	// After settling, compare fan 1 with its own calibration if available.
+	// Full/disengaged can take longer to spin up than a regulated level.
+	const int index = level == 64 ? 8 : (level <= 7 ? static_cast<int>(level) : -1);
+	if (CurrentMode >= 2 && index > 0 && FanLevelRpm[index] > 0
+		&& sampledAt - levelSince >= (level == 64 ? 120000ULL : 30000ULL)
+		&& rpm1 * 100LL < FanLevelRpm[index] * 75LL)
+		return false;
+	if (CurrentMode >= 2 && level != 0 && !(level & 0x80)
+		&& (rpm1 == 0 || rpm1 > 0x1fff || (!SingleFan && (rpm2 == 0 || rpm2 > 0x1fff)))) {
+		const ULONGLONG now = GetTickCount64();
+		if (!noRotationSince) noRotationSince = now;
+		if (now - noRotationSince >= 15000) return false;
+	} else {
+		noRotationSince = 0;
+	}
+	if (CurrentMode == 3 && __max(State.Sensors[0], __max(MaxTemp, rawSafetyTemp)) >= ManModeExitInternal) {
+		ModeToDialog(2);
+		CurrentMode = 2;
 	}
 
 	switch (this->CurrentMode) {
@@ -372,10 +396,10 @@ bool FANCONTROL::HandleData(void) {
 		break;
 
 	case 2: // Smart
-		this->SmartControl();
+		ok = this->SmartControl();
 		break;
 
-	case 3: // Manual
+	case 3: { // Manual
 		if (this->PreviousMode != this->CurrentMode) {
 			sprintf_s(obuf + strlen(obuf), sizeof(obuf) - strlen(obuf), "Change Mode from ");
 
@@ -398,35 +422,24 @@ bool FANCONTROL::HandleData(void) {
 			this->Trace(obuf);
 		}
 
-		if (SlimDialog)
-				::GetDlgItemText(this->hwndDialog, 8310, manlevel, sizeof(manlevel));
-			else
-				::GetWindowTextA(::GetDlgItem(this->hwndDialog, 8310), manlevel, sizeof(manlevel));
-
-		int speedVal;
-
-		if (manlevel[0] == 'x' && manlevel[1] == '\'') {
-			speedVal = strtol(manlevel + 2, NULL, 16);
-		} else if (manlevel[0] == '0' && (manlevel[1] == 'x' || manlevel[1] == 'X')) {
-			speedVal = strtol(manlevel, NULL, 16);
-		} else {
-			speedVal = strtol(manlevel, NULL, 0);
-		}
-
-		if (speedVal >= 0 && speedVal <= 255) {
+		int speedVal = this->LevelFromCombo(8310);
+		if ((speedVal >= 0 && speedVal <= 7) || speedVal == 64 || speedVal == 128) {
 			// same staircase as smart mode: run 7 regulated until the fan is
 			// spun up, then disengage for the last few hundred rpm
-			if (speedVal == 64 && this->State.FanCtrl != 64 && this->State.FanCtrl != 7 && this->fan1speed < 4000)
+			if (speedVal == 64 && !FanReadyForFull(State.FanCtrl, fan1speed, FanLevelRpm[7]))
 				speedVal = 7;
 
 			if (this->State.FanCtrl != speedVal)
 				ok = this->SetFan("Manual", speedVal);
 			else
 				ok = true;
+		} else {
+			ok = false;
 		}
 
 		break;
 
+	}
 	case 4: // Gorilla (Gorilla fork)
 		if (this->PreviousMode != this->CurrentMode) {
 			static const char* names[] = { "", "BIOS", "Smart", "Manual", "Gorilla", "Compile" };
@@ -435,8 +448,7 @@ bool FANCONTROL::HandleData(void) {
 				names[pm], this->GorillaTarget, this->GorillaFloor == 64 ? "full" : std::to_string(this->GorillaFloor).c_str());
 			this->Trace(obuf);
 		}
-		this->GorillaControl();
-		ok = true;
+		ok = this->GorillaControl();
 		break;
 
 	case 5: // Compile (Gorilla fork): Firefox and kernel builds
@@ -447,15 +459,33 @@ bool FANCONTROL::HandleData(void) {
 				names[pm], this->CompileTarget);
 			this->Trace(obuf);
 		}
-		this->CompileControl();
-		ok = true;
+		ok = this->CompileControl();
 		break;
 	}
 
 	this->PreviousMode = this->CurrentMode;
 
-	if (this->CurrentMode == 3 && this->MaxTemp > this->ManModeExitInternal)
-		this->CurrentMode = 2;
+	if (ok && requestedMode == CurrentMode) {
+		PersistUserMode(CurrentMode, NULL);
+		if (CurrentMode == 4) PersistGorilla(GorillaTarget, GorillaFloor);
+	}
+	if (ok && shared) {
+		shared->ackSeq = coolingFault ? shared->cmdSeq : this->LastCmdSeq;
+		shared->mode = this->CurrentMode;
+		shared->smartLevel = this->IndSmartLevel;
+		shared->gorillaTarget = this->GorillaTarget;
+		shared->gorillaFloor = this->GorillaFloor;
+		shared->loadPct = this->LoadPct;
+		shared->fanCtrl = (unsigned char)this->State.FanCtrl;
+		shared->fan1lo = (unsigned char)this->State.Fan1SpeedLo;
+		shared->fan1hi = (unsigned char)this->State.Fan1SpeedHi;
+		shared->fan2lo = (unsigned char)this->State.Fan2SpeedLo;
+		shared->fan2hi = (unsigned char)this->State.Fan2SpeedHi;
+		for (i = 0; i < 12; i++)
+			shared->sensors[i] = (unsigned char)this->State.Sensors[i];
+		::InterlockedIncrement(&shared->stateSeq);
+	}
+
 
 	return ok;
 }
@@ -477,35 +507,19 @@ bool FANCONTROL::HandleData(void) {
 //  Steps down only 2 C below the threshold that raised the fan, so it does
 //  not hunt. Full speed uses the same staircase as Smart and Manual.
 //-------------------------------------------------------------------------
-void FANCONTROL::GorillaControl(void) {
+bool FANCONTROL::GorillaControl(void) {
 	int cpu = this->State.Sensors[0];
 	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
 	int target = this->GorillaTarget;
 	int floor = this->GorillaFloor;
 	int cur = this->State.FanCtrl;
-	bool hot = this->MaxTemp > this->ManModeExitInternal;
+	bool hot = (__max(cpu, __max(this->MaxTemp, rawSafetyTemp)) >= this->ManModeExitInternal);
 
-	int want;
-	if (t >= target || hot)       want = 64;
-	else if (t >= target - 5)     want = 7;
-	else                          want = floor;
-
-	if (!hot) {
-		if (want != 64 && cur == 64 && t > target - 2)
-			want = 64;                                  // hold full speed until 2 C below target
-		if (want != 64 && want < 7 && (cur == 7 || cur == 64) && t > target - 7)
-			want = 7;                                   // hold level 7 until 2 C below its band
-	}
-	if (floor == 64 || this->GuardHold())
-		want = 64;
-	else if (want != 64 && want < floor)
-		want = floor;
-
-	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000)
+	int want = GorillaFanLevel(t, target, floor, cur, hot, GuardHold());
+	if (want == 64 && !FanReadyForFull(cur, fan1speed, FanLevelRpm[7]))
 		want = 7;                                       // spin up regulated first (as Smart)
 
-	if (want != cur)
-		this->SetFan("Gorilla", want);
+	return want == cur || this->SetFan("Gorilla", want);
 }
 
 //-------------------------------------------------------------------------
@@ -526,34 +540,33 @@ void FANCONTROL::GorillaControl(void) {
 //  it while the load stays high, so it does not hunt. Steers by the CPU
 //  sensor (sensor 1) like Gorilla mode; the hottest sensor if it does not read.
 //-------------------------------------------------------------------------
-void FANCONTROL::CompileControl(void) {
+bool FANCONTROL::CompileControl(void) {
 	int cpu = this->State.Sensors[0];
 	int t = (cpu > 0 && cpu < 128) ? cpu : this->MaxTemp;
 	int target = this->CompileTarget;
 	int cur = this->State.FanCtrl;
-	bool hot = this->MaxTemp > this->ManModeExitInternal;
-	bool rising = this->LastCpuTemp > 0 && t - this->LastCpuTemp >= 3;
+	bool hot = (__max(cpu, __max(this->MaxTemp, rawSafetyTemp)) >= this->ManModeExitInternal);
+	const ULONGLONG tick = GetTickCount64();
+	if (PreviousMode != 5) {
+		LastCpuTemp = 0;
+		BusySamples = LoadPct >= 60 ? 1 : 0;
+		FullHoldUntil = LastRaiseTick = lastCompileSample = 0;
+	}
+	const ULONGLONG elapsed = tick - lastCompileSample;
+	bool rising = lastCompileSample && elapsed >= 1000 && elapsed <= 15000
+		&& t > LastCpuTemp && (t - LastCpuTemp) * 5000ULL >= 3 * elapsed;
+	if (!lastCompileSample || elapsed >= 1000) {
+		lastCompileSample = tick;
+		LastPrev = LastCpuTemp;
+		LastCpuTemp = t;
+	}
 	bool busy = this->LoadPct >= 60;
-	this->LastPrev = this->LastCpuTemp;
 	this->LastT = t;
-	this->LastCpuTemp = t;
 	this->CtlCalls++;
-	const char* why;
-
-	// gorilla.5 (crash 2026-10-27 ~17:10): the fan sat at level 4 as a guarded commit started, because the EC
-	// reading lags the die. fieldkit guard now says a heavy job runs (guard-hold.txt): full speed for all of it.
-	bool guard = this->GuardHold();
-	int want;
-	if (guard) {
-		want = 64; why = "guard"; }
-	else if (t >= target || hot || rising) {
-		want = 64; why = hot ? "hot" : (t >= target ? "target" : "rise"); }
-	else if (t >= target - 10 || this->BusySamples >= 2) {
-		want = 7; why = t >= target - 10 ? "near" : "busy2"; }
-	else if (busy || t >= target - 20) {
-		want = 5; why = busy ? "busy" : "warm"; }
-	else {
-		want = 4; why = "floor"; }
+	bool guard = GuardHold();
+	const auto demand = CompileFanDemand(t, target, hot, rising, guard, busy, BusySamples);
+	int want = demand.level;
+	const char* why = demand.reason;
 
 	// Full speed, once engaged, is held for at least 30 s unless the CPU is far below the target. Without it a
 	// spiky load hunted: +5 C -> full, 62 C -> level 7, +8 C -> full ... every 5 s (owner's log, 2026-10-13 01:50).
@@ -572,7 +585,7 @@ void FANCONTROL::CompileControl(void) {
 	if (want != 64 && want < 4)
 		want = 4;
 
-	if (want == 64 && cur != 64 && cur != 7 && this->fan1speed < 4000) {
+	if (want == 64 && !FanReadyForFull(cur, fan1speed, FanLevelRpm[7])) {
 		want = 7; why = "stair"; }                      // spin up regulated first (as Smart)
 
 	// Up at once, down only 30 s after the last raise. A build's load comes in pulses (one job ends, the next
@@ -596,8 +609,7 @@ void FANCONTROL::CompileControl(void) {
 	this->LastWant = want;
 	strcpy_s(this->LastWhy, sizeof(this->LastWhy), why);
 
-	if (want != cur)
-		this->SetFan("Compile", want);
+	return want == cur || this->SetFan("Compile", want);
 }
 
 //-------------------------------------------------------------------------
@@ -610,12 +622,15 @@ void FANCONTROL::SampleLoad(void) {
 	unsigned long long kern = ((unsigned long long)fk.dwHighDateTime << 32) | fk.dwLowDateTime;
 	unsigned long long user = ((unsigned long long)fu.dwHighDateTime << 32) | fu.dwLowDateTime;
 	if (this->LastKernelT) {
+		// UI commands can request extra samples. Count load over complete intervals.
+		if (GetTickCount64() - lastLoadSample < 1000) return;
 		unsigned long long total = (kern - this->LastKernelT) + (user - this->LastUserT);
 		unsigned long long didle = idle - this->LastIdleT;
 		if (total > 0)
 			this->LoadPct = (int)(100 - (100 * didle) / total);   // kernel time includes idle time
 		this->BusySamples = this->LoadPct >= 60 ? this->BusySamples + 1 : 0;
 	}
+	lastLoadSample = GetTickCount64();
 	this->LastIdleT = idle; this->LastKernelT = kern; this->LastUserT = user;
 }
 
@@ -656,28 +671,6 @@ void FANCONTROL::ShowFanSpeed(void) {
 	::SetDlgItemText(this->hwndDialog, 8102, buf);
 }
 
-bool FANCONTROL::ReadFanSpeedOnly(void) {
-	if (!this->EcAccess.Lock(50))
-		return false;                                   // the full read or another tool has the EC: next second
-	char lo = 0, hi = 0, lo2 = 0, hi2 = 0;
-	bool ok = this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN1)
-		&& this->ReadByteFromEC(TP_ECOFFSET_FANSPEED, &lo) && this->ReadByteFromEC(TP_ECOFFSET_FANSPEED + 1, &hi)
-		&& this->ReadByteFromEC(TP_ECOFFSET_FANSPEED, &lo2) && this->ReadByteFromEC(TP_ECOFFSET_FANSPEED + 1, &hi2);
-	this->FreeECAccess();
-	int rpm = ((unsigned char)hi << 8) | (unsigned char)lo;
-	if (!ok || lo != lo2 || hi != hi2 || rpm > 0x1fff)
-		return false;                                   // two equal readings, as ReadEcStatus demands
-	this->State.Fan1SpeedLo = lo;
-	this->State.Fan1SpeedHi = hi;
-	this->fan1speed = rpm;
-	FCSHARED* shared = SharedState();
-	if (shared) {
-		shared->fan1lo = (unsigned char)lo;
-		shared->fan1hi = (unsigned char)hi;
-	}
-	return true;
-}
-
 void FANCONTROL::PullFanSpeed(void) {
 	FCSHARED* shared = SharedState();
 	if (!shared)
@@ -706,10 +699,10 @@ void FANCONTROL::WriteStatusFile(void) {
 	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
 	int cpu = this->State.Sensors[0];
 	// want/why/t/prev/n: the LAST Compile-mode decision (this line is written before this cycle decides)
-	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u\r\n",
+	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u;fault=%d;bios_verified=%d;sample_ok=%d\r\n",
 		(unsigned long)::GetTickCount64(), this->CurrentMode, (cpu > 0 && cpu < 128) ? cpu : -1, this->MaxTemp,
 		this->LoadPct, this->State.FanCtrl, this->fan1speed, this->LastWant & 0xff, this->CtlCalls ? this->LastWhy : "none",
-		this->LastT, this->LastPrev, this->CtlCalls);
+		this->LastT, this->LastPrev, this->CtlCalls, coolingFault, biosConfirmed, ReadErrorCount == 0);
 	HANDLE h = ::CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (h == INVALID_HANDLE_VALUE) return;
 	DWORD w = 0;
@@ -721,7 +714,7 @@ void FANCONTROL::WriteStatusFile(void) {
 //-------------------------------------------------------------------------
 //  smart fan control depending on temperature
 //-------------------------------------------------------------------------
-void FANCONTROL::SmartControl(void) {
+bool FANCONTROL::SmartControl(void) {
 	char obuf[256] = "";
 	int i, newfanctrl = -1, levelIndex = -1, fanctrl = this->State.FanCtrl;
 
@@ -753,7 +746,7 @@ void FANCONTROL::SmartControl(void) {
 	//5 Level = 95   64  0   0 
 	//6 Level = 105 128  0   0 
 
-	if ((fanctrl > 7 && (fanctrl != 64 || !Lev64Norm)) || this->PreviousMode == 3 || this->PreviousMode == 1 || this->PreviousMode == 4) {
+	if ((fanctrl > 7 && (fanctrl != 64 || !Lev64Norm)) || this->PreviousMode == 3 || this->PreviousMode == 1 || this->PreviousMode == 4 || this->PreviousMode == 5) {
 		fanctrl = 0;
 		levelIndex = 0;
 		newfanctrl = 0;
@@ -770,7 +763,12 @@ void FANCONTROL::SmartControl(void) {
 	// Check for fan speed ramp downwards
 	if (newfanctrl == -1) {
 		for (i = 0; this->SmartLevels[i].temp != -1; i++) {
-			if (this->MaxTemp <= this->SmartLevels[i].temp - this->SmartLevels[i].hystDown && this->SmartLevels[i].fan < fanctrl) {
+			const auto& row = SmartLevels[i];
+			// Zero hysteresis follows the configured temperature bands in both directions.
+			// Nonzero down thresholds retain the legacy destination-row interpretation.
+			bool below = row.hystDown ? MaxTemp <= row.temp - row.hystDown
+				: SmartLevels[i + 1].temp != -1 && MaxTemp < SmartLevels[i + 1].temp;
+			if (below && row.fan < fanctrl) {
 				newfanctrl = this->SmartLevels[i].fan;
 				levelIndex = i;
 				break;
@@ -783,27 +781,80 @@ void FANCONTROL::SmartControl(void) {
 	// so the crawl only covers the last few hundred rpm
 	// Gorilla fork, gorilla.4: "spun up" is 4000 rpm OR one sample at level 7. An L15 Gen 3 tops out
 	// at ~3490 rpm, so with 4000 alone full speed never engaged (measured 2026-10-13: 90 C at level 7).
-	if (newfanctrl == 64 && fanctrl != 64 && fanctrl != 7 && this->fan1speed < 4000)
+	if (newfanctrl == 64 && !FanReadyForFull(State.FanCtrl, fan1speed, FanLevelRpm[7]))
 		newfanctrl = 7;
 
-	if (newfanctrl != -1 && newfanctrl != this->State.FanCtrl) {
-		this->SetFan("Smart", newfanctrl);
-	}
-
-	return;
+	return newfanctrl == -1 || newfanctrl == this->State.FanCtrl || this->SetFan("Smart", newfanctrl);
 }
 
 //-------------------------------------------------------------------------
 //  set fan state via EC
 //-------------------------------------------------------------------------
+void FANCONTROL::RecoverCooling(const char* reason) {
+	if (!coolingFault) Trace(reason);
+	coolingFault = true;
+	ModeToDialog(1);
+	CurrentMode = 1;
+	biosConfirmed = SetFan("Safety handback", 0x80);
+	FCSHARED* shared = SharedState();
+	if (shared) {
+		shared->mode = 1;
+		shared->fanCtrl = static_cast<unsigned char>(State.FanCtrl);
+		shared->ackSeq = shared->cmdSeq;
+		::InterlockedIncrement(&shared->stateSeq);
+	}
+	Trace(biosConfirmed ? "Safety fault: BIOS handback verified; restart required"
+		: "Safety fault: BIOS handback unconfirmed; retry on next sample");
+}
+
+// Record active control before a fixed-level write. CREATE_NEW distinguishes a
+// prior engine's interrupted session. Only verified firmware handback clears it.
+bool FANCONTROL::ChangeControlMarker(bool claim) {
+	char dir[MAX_PATH], path[MAX_PATH];
+	DWORD n = GetEnvironmentVariableA("ProgramData", dir, sizeof(dir));
+	if (!n || n >= sizeof(dir) || strlen(dir) + sizeof("\\TPFanControl\\active-control.lock") > MAX_PATH)
+		return false;
+	strcat_s(dir, "\\TPFanControl");
+	if (!CreateDirectoryA(dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+	sprintf_s(path, "%s\\active-control.lock", dir);
+	if (claim) {
+		if (controlMarked) return true;
+		HANDLE marker = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+			FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+		if (marker == INVALID_HANDLE_VALUE) return false;
+		DWORD written = 0;
+		const char msg[] = "fixed fan control pending firmware handback\r\n";
+		bool saved = WriteFile(marker, msg, sizeof(msg)-1, &written, NULL)
+			&& written == sizeof(msg)-1 && FlushFileBuffers(marker);
+		CloseHandle(marker);
+		controlMarked = saved;
+		return saved;
+	}
+	if (!DeleteFileA(path) && GetLastError() != ERROR_FILE_NOT_FOUND) return false;
+	controlMarked = false;
+	return true;
+}
+
+bool FANCONTROL::SelectFanBank(char bank) {
+	if (SingleFan) return true;
+	char current, observed;
+	if (!ReadByteFromEC(TP_ECOFFSET_FAN_SWITCH, &current)) return false;
+	char selected = (current & ~1) | (bank & 1);
+	if (current == selected) return true;
+	return WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, selected)
+		&& ReadByteFromEC(TP_ECOFFSET_FAN_SWITCH, &observed) && observed == selected;
+}
+
 bool FANCONTROL::SetFan(const char* source, int fanctrl, bool final) {
 	char obuf[256] = "",
 		 obuf2[256],
 		 datebuf[128];
-	int ok = 0, fan1_ok = 0, fan2_ok = 0;
+	int ok = 0;
 	char* p = obuf;
 
-	if (g_clientMode)
+	if (g_clientMode || ((coolingFault || isPowerSuspendState || m_needClose) && fanctrl != 0x80))
+		return false;
+	if (fanctrl != 0x80 && fanctrl != 64 && (fanctrl < 0 || fanctrl > 7))
 		return false;
 
 	if (this->FanBeepFreq && this->FanBeepDura)
@@ -817,41 +868,38 @@ bool FANCONTROL::SetFan(const char* source, int fanctrl, bool final) {
 	p += sprintf_s(p, sizeof(obuf) - (p - obuf), "Result: ");
 
 	if (this->ActiveMode && !this->FinalSeen) {
+		if (fanctrl != 0x80 && !ChangeControlMarker(true))
+			return false;
 		if (!this->LockECAccess()) return false;
 
-		for (int i = 0; i < 5; i++) {
-			// set new fan1 level
-			ok = this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN1);
-			ok = this->WriteByteToEC(TP_ECOFFSET_FAN, fanctrl);
+		// A failed select must stop the transaction before a level is written.
+		auto applyLevel = [&](char bank) -> bool {
+			if (!SelectFanBank(bank))
+				return false;
+			if (!this->WriteByteToEC(TP_ECOFFSET_FAN, fanctrl))
+				return false;
 			::Sleep(100);
-			// verify completion of fan1
-			fan1_ok = this->ReadByteFromEC(TP_ECOFFSET_FAN, &this->State.FanCtrl);
-			::Sleep(100);
-
-			if (!SingleFan) {
-				// set new fan2 level
-				ok = this->WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN2);
-				ok = this->WriteByteToEC(TP_ECOFFSET_FAN, fanctrl);
-				::Sleep(100);
-				// verify completion of fan2
-				fan2_ok = this->ReadByteFromEC(TP_ECOFFSET_FAN, &this->State.FanCtrl);
-				::Sleep(100);
-			}
-			else {
-				fan2_ok = true;
-			}
-
-			if (fan1_ok && fan2_ok) {
-				p += sprintf_s(p, sizeof(obuf) - (p - obuf), "[i=%d] ", i);
-				break;
-			}
-
-			::Sleep(250);
+			char observed = 0;
+			return this->ReadByteFromEC(TP_ECOFFSET_FAN, &observed)
+				&& static_cast<unsigned char>(observed) == fanctrl;
+		};
+		ok = applyLevel(TP_ECVALUE_SELFAN1);
+		if (!SingleFan && (ok || fanctrl == 0x80)) {
+			// Even when fan 1 failed, attempt handback on both banks.
+			bool secondOk = applyLevel(TP_ECVALUE_SELFAN2);
+			ok = secondOk && ok;
 		}
+		if (ok)
+			this->State.FanCtrl = static_cast<char>(fanctrl);
+		biosConfirmed = ok && fanctrl == 0x80;
 
 		this->FreeECAccess();
+		if (biosConfirmed && !ChangeControlMarker(false)) {
+			Trace("Could not clear active-control marker after firmware handback");
+			ok = false;
+		}
 
-		if (this->State.FanCtrl == fanctrl) {
+		if (ok) {
 			p += sprintf_s(p, sizeof(obuf) - (p - obuf), "OK");
 			ok = true;
 			if (final)
@@ -872,8 +920,7 @@ bool FANCONTROL::SetFan(const char* source, int fanctrl, bool final) {
 	this->Trace(this->CurrentStatus);
 	this->Trace(obuf);
 
-	if (!final)
-		::PostMessage(this->hwndDialog, WM__GETDATA, 0, 0);
+	// Timer 1 supplies the next sample. A failed command must not queue itself.
 
 	return ok;
 }
@@ -983,8 +1030,9 @@ void FANCONTROL::FreeECAccess() {
 //  read fan and temperatures from embedded controller
 //-------------------------------------------------------------------------
 bool FANCONTROL::ReadEcStatus(FCSTATE* pfcstate) {
-	FCSTATE sample1, sample2;
-	const int numTries = 10;
+	const ULONGLONG started = GetTickCount64();
+	FCSTATE sample1{}, sample2{};
+	const int numTries = 2;
 	const int sleepTicks = 200;
 
 	if (pfcstate == NULL) {
@@ -1001,9 +1049,9 @@ bool FANCONTROL::ReadEcStatus(FCSTATE* pfcstate) {
 
 	for (int i = 0; i < numTries; i++) {
 		const bool okSample1 = this->ReadEcRaw(&sample1);
-		const bool okSample2 = this->ReadEcRaw(&sample2);
+		const bool okSample2 = okSample1 && this->ReadEcRaw(&sample2);
 
-		if (okSample1 && okSample2 && this->SampleMatch(&sample1, &sample2)) {
+		if (okSample1 && okSample2 && GetTickCount64() - started <= 5000 && this->SampleMatch(&sample1, &sample2)) {
 			memcpy(pfcstate, &sample2, sizeof(*pfcstate));
 			this->FreeECAccess();
 			return TRUE;
@@ -1030,21 +1078,23 @@ bool FANCONTROL::ReadEcRaw(FCSTATE* pfcstate) {
 
 	pfcstate->FanCtrl = -1;
 
-	// Status Register
-	if (!ReadByteFromEC(TP_ECOFFSET_FAN, &pfcstate->FanCtrl)) {
-		this->Trace("failed to read status register from EC");
-		return false;
-	}
 
 	//
 	// Fan 1 first
 	//
 
 	// Select 
-	if (!WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN1)) {
+	if (!SelectFanBank(TP_ECVALUE_SELFAN1)) {
 		this->Trace("failed to select Fan 1 in EC");
 		return false;
 	}
+
+	// Status Register
+	if (!ReadByteFromEC(TP_ECOFFSET_FAN, &pfcstate->FanCtrl)) {
+		this->Trace("failed to read status register from EC");
+		return false;
+	}
+
 
 	// Lo
 	if (!ReadByteFromEC(TP_ECOFFSET_FANSPEED, &pfcstate->Fan1SpeedLo)) {
@@ -1062,7 +1112,7 @@ bool FANCONTROL::ReadEcRaw(FCSTATE* pfcstate) {
 		//
 		// Fan 2 last
 		//
-		if (!WriteByteToEC(TP_ECOFFSET_FAN_SWITCH, TP_ECVALUE_SELFAN2)) {
+		if (!SelectFanBank(TP_ECVALUE_SELFAN2)) {
 			this->Trace("failed to select Fan 2 in EC");
 			return false;
 		}
@@ -1100,8 +1150,7 @@ bool FANCONTROL::ReadEcRaw(FCSTATE* pfcstate) {
 			pfcstate->SensorName[idxtemp] = this->gSensorNames[idxtemp];
 
 			if (ReadByteFromEC(TP_ECOFFSET_TEMP0 + i, &pfcstate->Sensors[idxtemp])) {
-				if (this->ShowBiasedTemps)
-					pfcstate->Sensors[idxtemp] = pfcstate->Sensors[idxtemp] - this->SensorOffset[idxtemp].offs;
+				// Keep raw sensor bytes for validity and emergency checks.
 			}
 			else {
 				this->Trace("failed to read a TEMP0 byte from EC");
@@ -1120,8 +1169,7 @@ bool FANCONTROL::ReadEcRaw(FCSTATE* pfcstate) {
 				pfcstate->SensorName[idxtemp] = this->gSensorNames[idxtemp];
 
 				if (ReadByteFromEC(TP_ECOFFSET_TEMP1 + i, &pfcstate->Sensors[idxtemp])) {
-					if (this->ShowBiasedTemps)
-						pfcstate->Sensors[idxtemp] = pfcstate->Sensors[idxtemp] - this->SensorOffset[idxtemp].offs;
+					// Keep raw sensor bytes for validity and emergency checks.
 				}
 				else {
 					this->Trace("failed to read a TEMP1 byte from EC");
