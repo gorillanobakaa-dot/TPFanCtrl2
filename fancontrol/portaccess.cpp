@@ -353,38 +353,42 @@ PortAccess_AllowsPort(USHORT port) {
 	}
 }
 
-UCHAR
-PortAccess_ReadByte(USHORT port) {
+bool
+PortAccess_ReadByte(USHORT port, UCHAR& value) {
 	switch (g_backend) {
 	case PORTACCESS_PAWNIO: {
-		ULONG64 in = port;
-		ULONG64 out = 0;
-		if (PawnIoExecute("ioctl_pio_read", &in, 1, &out, 1))
-			return (UCHAR)out;
-		break;
+		ULONG64 in = port, out = 0;
+		if (!PawnIoExecute("ioctl_pio_read", &in, 1, &out, 1))
+			return false;
+		value = static_cast<UCHAR>(out);
+		return true;
 	}
 	case PORTACCESS_TVICPORT:
-		return g_tvicReadPort(port);
+		value = g_tvicReadPort(port);
+		return true; // This legacy DLL provides no separate error result.
 	default:
-		break;
+		return false;
 	}
-
-	// reads like a floating bus, so the EC wait loops time out and trace
-	return 0xFF;
 }
 
-void
+// Legacy TWR mailbox reads use the TVicPort API.
+UCHAR PortAccess_ReadByte(USHORT port) {
+	UCHAR value = 0xff;
+	PortAccess_ReadByte(port, value);
+	return value;
+}
+
+bool
 PortAccess_WriteByte(USHORT port, UCHAR value) {
 	switch (g_backend) {
 	case PORTACCESS_PAWNIO: {
 		ULONG64 in[2] = { port, value };
-		PawnIoExecute("ioctl_pio_write", in, 2, NULL, 0);
-		break;
+		return PawnIoExecute("ioctl_pio_write", in, 2, NULL, 0);
 	}
 	case PORTACCESS_TVICPORT:
 		g_tvicWritePort(port, value);
-		break;
+		return true;
 	default:
-		break;
+		return false;
 	}
 }

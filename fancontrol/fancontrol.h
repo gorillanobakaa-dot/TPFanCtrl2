@@ -220,11 +220,10 @@ protected:
 	int  LevelFromCombo(int comboId);       // -1 if nothing usable is selected
 	void GorillaToDialog();                 // target + minimum -> combos
 	void GorillaFromDialog();               // combos -> members
-	void GorillaControl();                  // fan decision in mode 4
-	void CompileControl();                  // fan decision in mode 5 (Compile)
+	bool GorillaControl();                  // fan decision in mode 4
+	bool CompileControl();                  // fan decision in mode 5 (Compile)
 	void SampleLoad();                      // LoadPct from GetSystemTimes deltas
 	bool GuardHold();                       // fieldkit guard runs a heavy job: full speed (gorilla.5)
-	bool ReadFanSpeedOnly();                // engine: the fan's rpm alone, every second (gorilla.5)
 	void PullFanSpeed();                    // client: the engine's latest rpm, every second
 	void ShowFanSpeed();                    // the "Gorilla Fan speed" line
 	void WriteStatusFile();                 // %ProgramData%\TPFanControl\status.txt, every sample, engine only
@@ -274,8 +273,23 @@ protected:
 	bool ReadEcRaw(FCSTATE* pfcstate);
 
 	bool HandleData();
+	bool coolingFault = false;
+	bool controlMarked = false;
+	bool ChangeControlMarker(bool claim);
+	bool SelectFanBank(char bank);
+	ULONGLONG levelSince = 0;
+	int monitoredLevel = -1;
+	bool biosConfirmed = false;
+	bool startupChecked = false;
+	bool discardWorkerSample = false;
+	int rawSafetyTemp = 0;
+	ULONGLONG noRotationSince = 0;
+	ULONGLONG lastCompileSample = 0;
+	ULONGLONG lastLoadSample = 0;
+	void RecoverCooling(const char* reason);
+	static int ParseManualLevel(const char* text);
 
-	void SmartControl();
+	bool SmartControl();
 
 	bool SetFan(const char* source, int level, bool final = false);
 

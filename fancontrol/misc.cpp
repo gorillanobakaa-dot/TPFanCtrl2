@@ -31,6 +31,7 @@ FANCONTROL::ReadConfig(const char* configfile)
 
 	int i, ok = false, lcnt1 = 0, lcnt2 = 0;
 
+	bool invalidCurve = false;
 	int ProcessPriority = 2;
 
 	strncpy_s(this->MenuLabelSM1, sizeof(this->MenuLabelSM1), "Smart Level 1", 14);
@@ -84,7 +85,10 @@ FANCONTROL::ReadConfig(const char* configfile)
 			}
 
 			if (_strnicmp(buf, "ManFanSpeed=", 12) == 0) {
-				this->ManFanSpeed = atoi(buf + 12);
+				char* end = strpbrk(buf + 12, "\r\n/;#");
+				if (end) *end = 0;
+				int value = ParseManualLevel(buf + 12);
+				this->ManFanSpeed = value >= 0 ? value : 128;
 				continue;
 			}
 
@@ -152,16 +156,24 @@ FANCONTROL::ReadConfig(const char* configfile)
 				continue;
 			}
 
-			if (_strnicmp(buf, "level=", 6) == 0) {
-				sscanf_s(buf + 6, "%d %d %d %d", &this->SmartLevels[lcnt1].temp, &this->SmartLevels[lcnt1].fan, &this->SmartLevels[lcnt1].hystUp, &this->SmartLevels[lcnt1].hystDown);
-				sscanf_s(buf + 6, "%d %d %d %d", &this->SmartLevels1[lcnt1].temp1, &this->SmartLevels1[lcnt1].fan1, &this->SmartLevels1[lcnt1].hystUp1, &this->SmartLevels1[lcnt1].hystDown1);
-				lcnt1++;
-				continue;
-			}
-
-			if (_strnicmp(buf, "level2=", 7) == 0) {
-				sscanf_s(buf + 7, "%d %d %d %d", &this->SmartLevels2[lcnt2].temp2, &this->SmartLevels2[lcnt2].fan2, &this->SmartLevels2[lcnt2].hystUp2, &this->SmartLevels2[lcnt2].hystDown2);
-				lcnt2++;
+			bool secondCurve = _strnicmp(buf, "level2=", 7) == 0;
+			if (secondCurve || _strnicmp(buf, "level=", 6) == 0) {
+				int& count = secondCurve ? lcnt2 : lcnt1;
+				int temp = 0, fan = -1, up = 0, down = 0;
+				int fields = sscanf_s(buf + (secondCurve ? 7 : 6), "%d %d %d %d", &temp, &fan, &up, &down);
+				int last = count ? (secondCurve ? SmartLevels2[count-1].temp2 : SmartLevels[count-1].temp) : -1;
+				if (count >= ARRAYMAX(SmartLevels) - 1 || fields < 2 || temp <= last || temp > 300
+					|| up < 0 || up > 300 || down < 0 || down > 300
+					|| !((fan >= 0 && fan <= 7) || fan == 64 || fan == 128)) {
+					invalidCurve = true;
+					continue;
+				}
+				if (secondCurve) SmartLevels2[count] = {temp, fan, up, down};
+				else {
+					SmartLevels[count] = {temp, fan, up, down};
+					SmartLevels1[count] = {temp, fan, up, down};
+				}
+				++count;
 				continue;
 			}
 
@@ -599,6 +611,11 @@ FANCONTROL::ReadConfig(const char* configfile)
 				(DLGPROC)BaseDlgProc,
 				(LPARAM)this);
 
+		if (invalidCurve) {
+			coolingFault = true;
+			ActiveMode = 1;
+			Trace("Invalid Smart curve: firmware control required");
+		}
 		// end marker for smart levels array
 		if (lcnt1) {
 			this->SmartLevels[lcnt1].temp = -1;
@@ -999,14 +1016,19 @@ FANCONTROL::CreateThread(int(_stdcall* fnct)(ULONG), ULONG p) {
 //  and line ending byte for byte. Written to a temp file first, then moved
 //  over the original, so a crash can never leave a half-written config.
 //-------------------------------------------------------------------------
-static int ParseManualLevel(const char* text)
-{
-	if (!text || !text[0]) return -1;
-	if (text[0] == 'x' && text[1] == '\'') return (int)strtol(text + 2, NULL, 16);
-	if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) return (int)strtol(text, NULL, 16);
+int FANCONTROL::ParseManualLevel(const char* text) {
+	if (!text) return -1;
+	while (*text == ' ' || *text == '\t') ++text;
+	const bool quoted = text[0] == 'x' && text[1] == 39;
+	if (quoted) text += 2;
 	char* end = NULL;
-	long v = strtol(text, &end, 0);
-	return (end == text) ? -1 : (int)v;
+	long value = strtol(text, &end, quoted ? 16 : 0);
+	if (end == text) return -1;
+	if (quoted && *end == 39) ++end;
+	while (*end == ' ' || *end == '\t') ++end;
+	if (*end || !((value >= 0 && value <= 7) || value == 64 || value == 128))
+		return -1;
+	return static_cast<int>(value);
 }
 
 // Rewrite the given KEY=VALUE lines of TPFanControl.ini; every other byte,
@@ -1070,7 +1092,8 @@ FANCONTROL::PersistUserMode(int mode, const char* levelText)
 {
 	// never write Active=0 (read-only). 5 = Compile: it was refused here, so a Compile choice was never kept
 	if (mode < 1 || mode > 5) return;
-	int level = (mode == 3) ? ParseManualLevel(levelText) : -1;
+	if (coolingFault && mode != 1) return;
+	int level = (mode == 3) ? LevelFromCombo(8310) : -1;
 	if (mode == 3 && (level < 0 || level > 255)) return;   // unparsable level: keep the file as is
 
 	const char* keys[2] = { "Active", "ManFanSpeed" };

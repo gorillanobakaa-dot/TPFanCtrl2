@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.16)
+project(TPFanControlEcTests LANGUAGES CXX)
+enable_testing()
+add_executable(ec_transaction ec_transaction.cpp)
+target_compile_features(ec_transaction PRIVATE cxx_std_17)
+add_test(NAME ec_transaction COMMAND ec_transaction)

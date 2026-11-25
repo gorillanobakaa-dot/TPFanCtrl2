@@ -35,8 +35,9 @@ const char* PortAccess_BackendName(void);
 // false when the active backend cannot reach the port at all
 bool PortAccess_AllowsPort(USHORT port);
 
+bool PortAccess_ReadByte(USHORT port, UCHAR& value);
 UCHAR PortAccess_ReadByte(USHORT port);
-void PortAccess_WriteByte(USHORT port, UCHAR value);
+bool PortAccess_WriteByte(USHORT port, UCHAR value);
 
 // the backend opens before the engine can trace, so messages queue up here
 int PortAccess_InitMessageCount(void);
