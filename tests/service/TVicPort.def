@@ -1,0 +1,6 @@
+LIBRARY TVicPort
+EXPORTS
+    OpenTVicPort=_OpenTVicPort@0
+    CloseTVicPort=_CloseTVicPort@0
+    ReadPort=_ReadPort@4
+    WritePort=_WritePort@8

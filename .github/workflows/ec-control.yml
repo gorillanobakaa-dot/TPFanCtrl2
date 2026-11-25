@@ -19,3 +19,20 @@ jobs:
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
           & $msbuild fancontrol/fancontrol.sln /p:Configuration=Release /p:Platform=Win32 /p:PlatformToolset=v143
           exit $LASTEXITCODE
+      - name: Build simulated EC DLL for the Windows service
+        if: runner.os == 'Windows' && github.event_name == 'pull_request'
+        run: |
+          cmake -S tests/service -B service-fixture -A Win32
+          cmake --build service-fixture --config Release
+      - name: Exercise the release executable as a Windows service
+        if: runner.os == 'Windows' && github.event_name == 'pull_request'
+        timeout-minutes: 8
+        shell: pwsh
+        run: ./tests/service/exercise.ps1 -Engine ./fancontrol/Release/TPFanControl.exe -Simulator ./service-fixture/Release/TVicPort.dll -OutputDir ./service-evidence
+      - name: Save service readings and event logs
+        if: always() && runner.os == 'Windows' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-service-evidence
+          path: service-evidence/
+          retention-days: 14
