@@ -7,7 +7,7 @@ TPFanControl / TPFanCtrl2
   This build is a fork with window and settings changes; the fan logic is
   unchanged.
 
-LpcACPIEC.bin (PawnIO module for the embedded controller)
+LpcACPIEC.bin and LpcThinkpadEC.bin (PawnIO modules for the embedded controller)
   Source:   https://github.com/namazso/PawnIO.Modules
   Licence:  GNU Lesser General Public License v2.1.
             See LpcACPIEC-LGPL-2.1.txt.

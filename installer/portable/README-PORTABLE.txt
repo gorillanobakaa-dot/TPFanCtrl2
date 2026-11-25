@@ -42,6 +42,6 @@ STOPPING
   control.
 
 LICENCES
-  See the licences folder: TPFanControl (Unlicense), the LpcACPIEC module
+  See the licences folder: TPFanControl (Unlicense), the LpcACPIEC and LpcThinkpadEC modules
   (LGPL-2.1), and the PawnIO driver (GPL-2.0, source at
   https://github.com/namazso/PawnIO).
