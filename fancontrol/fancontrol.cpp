@@ -247,7 +247,7 @@ void FANCONTROL::InitDialogWindow() {
 				if (cw < 120) cw = 168;               // not laid out yet: old total
 				int w0 = cw * 14 / 100, w1 = cw * 30 / 100, w2 = cw * 30 / 100;
 				lvc.cx = w0; lvc.pszText = (LPSTR)"#"; ListView_InsertColumn(hLV, 0, &lvc);
-				lvc.cx = w1; lvc.pszText = (LPSTR)"Name"; ListView_InsertColumn(hLV, 1, &lvc);
+				lvc.cx = w1; lvc.pszText = (LPSTR)(packageRequired ? "Label" : "Name"); ListView_InsertColumn(hLV, 1, &lvc);
 				lvc.cx = w2; lvc.pszText = (LPSTR)"Temp"; ListView_InsertColumn(hLV, 2, &lvc);
 				lvc.cx = cw - w0 - w1 - w2; lvc.pszText = (LPSTR)"Addr"; ListView_InsertColumn(hLV, 3, &lvc);
 			}
@@ -2080,7 +2080,6 @@ FANCONTROL::UpdateTempDisplay(void)
 		int temp = this->State.Sensors[i];
 		BOOL show = (temp < 128 && temp != 0) || (this->ShowAll == 1);
 
-		if (packageRequired && i > 0) show = ShowAll;
 		if (show)
 		{
 			sprintf_s(buf, sizeof(buf), "%d", i + 1);
@@ -2089,7 +2088,7 @@ FANCONTROL::UpdateTempDisplay(void)
 			lvi.pszText = buf;
 			int idx = ListView_InsertItem(hLV, &lvi);
 
-			ListView_SetItemText(hLV, idx, 1, (LPSTR)(packageRequired ? "EC" : State.SensorName[i]));
+			ListView_SetItemText(hLV, idx, 1, (LPSTR)State.SensorName[i]);
 
 			if (packageRequired && i > 0) sprintf_s(buf, "raw %u", temp);
 			else if (temp < 128 && temp != 0)

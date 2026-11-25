@@ -205,9 +205,9 @@ bool FANCONTROL::HandleData(void) {
 	for (i = 0; i < 12; i++) {
 		int temp = this->State.Sensors[i];
 
-		if (packageRequired && i && !ShowAll) continue;
+		if (packageRequired && i && !ShowAll && (temp == 0 || temp >= 128)) continue;
 		if (packageRequired && i) {
-			sprintf_s(obuf2, "EC[0x%02x] raw %u\r\n", State.SensorAddr[i], temp);
+			sprintf_s(obuf2, "%s EC[0x%02x] raw %u\r\n", State.SensorName[i], State.SensorAddr[i], temp);
 			strcat_s(templist2, obuf2);
 			continue;
 		}
