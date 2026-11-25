@@ -25,6 +25,7 @@ New-Item -ItemType Directory -Path "$stage\licences", "$stage\PawnIO" -Force | O
 
 Copy-Item (Join-Path $root 'fancontrol\Release\TPFanControl.exe') $stage
 Copy-Item (Join-Path $root 'fancontrol\pawnio\LpcACPIEC.bin')    $stage
+Copy-Item (Join-Path $root 'fancontrol\pawnio\LpcThinkpadEC.bin')    $stage
 Copy-Item (Join-Path $root 'fancontrol\TPFanControl.ini')        $stage
 Copy-Item (Join-Path $inst 'portable\*')                          $stage
 Copy-Item $pawn                                                   "$stage\PawnIO"

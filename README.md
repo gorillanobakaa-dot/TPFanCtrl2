@@ -121,12 +121,13 @@ The EC is reached through one of two port drivers, tried in this order
 (override with `PortBackend=` in the ini):
 
 - **PawnIO** — install it from [pawnio.eu](https://pawnio.eu) or
-  `winget install namazso.PawnIO`, and keep `LpcACPIEC.bin` (bundled
+  `winget install namazso.PawnIO`, and keep `LpcThinkpadEC.bin` and `LpcACPIEC.bin` (bundled
   here under `fancontrol/pawnio/`, part of the release zip) next to the
   exe. The driver is WHQL-signed and works with memory integrity (HVCI)
   enabled — this is the right choice on any current Windows 11 machine,
-  where TVicPort's driver is refused. The signed module reaches the EC
-  through the classic ports 0x62/0x66.
+  where TVicPort's driver is refused. The service prefers the dedicated ThinkPad EC window
+  at 0x1600/0x1604. If the module cannot open it, startup tries the
+  classic ports 0x62/0x66. The selected interface stays fixed until exit.
 - **TVicPort** — put `TVicPort.dll` next to the exe with its kernel
   driver (`TVicPort64.sys` in `System32\drivers`) in place. Both ship
   with the original TPFanControl installer from the SourceForge days;
@@ -136,7 +137,7 @@ The EC is reached through one of two port drivers, tried in this order
 
 ## Install
 
-1. Put `TPFanControl.exe`, `TPFanControl.ini` and `LpcACPIEC.bin` (or
+1. Put `TPFanControl.exe`, `TPFanControl.ini` and both PawnIO modules (or
    `TVicPort.dll`) in a folder of their own, e.g.
    `C:\Program Files\TPFanCtrl2`.
 2. Run the exe as administrator once and enable **Start with Windows** in

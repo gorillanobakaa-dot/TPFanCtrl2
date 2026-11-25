@@ -12,3 +12,11 @@ redistributed here; users install it from [pawnio.eu](https://pawnio.eu)
 or `winget install namazso.PawnIO`.
 
 sha256: `c38fd116e7aff4d1fdb0a494e296be0a6708e5a22fc72f14587442fb7f8f7906`
+
+The signed LpcThinkpadEC.bin module from PawnIO.Modules 0.2.12 is tried first.
+It checks for a Lenovo ThinkPad and a responding dedicated EC window. When
+available, the session uses this module exclusively. It exposes ports 0x1600
+through 0x161f. The existing ACPI module remains available on other machines.
+Both modules execute locally inside PawnIO. Neither opens a network connection.
+
+LpcThinkpadEC.bin SHA-256: 54bbf7f10d3511abfff167597485926ddf1587045f6ae849671cfaa85f97a1db
