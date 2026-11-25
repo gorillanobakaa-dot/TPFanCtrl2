@@ -1,6 +1,7 @@
 #include "../fancontrol/ectransaction.h"
 #include "../fancontrol/fanpolicy.h"
 #include <cassert>
+#include <cstdio>
 #include <vector>
 
 struct FakePorts {
@@ -53,6 +54,23 @@ int main() {
     assert(CompileFanDemand(40,70,false,true,false,false,0).level == 64);
     assert(CompileFanDemand(40,70,false,false,true,false,0).level == 64);
 
+    assert(DecodePackageTemperature(100ULL << 16, (1ULL << 31) | (10ULL << 16)) == 90);
+    assert(DecodePackageTemperature(100ULL << 16, 10ULL << 16) == -1);
+    assert(DecodePackageTemperature(0, 1ULL << 31) == -1);
+    assert(CoolingTemperature(66, -1, 100, 103, 104) == -1);
+    assert(CoolingTemperature(66, 70, 100, 103, 5101) == -1);
+    assert(CoolingTemperature(66, 70, 6000, 103, 6001) == -1);
+    // A fresh, steady sample, idle load, no hysteresis, fan already at regulated 7.
+    struct Case { int ec, package, expected; };
+    for (auto sample : {Case{66,66,7}, Case{66,70,64}, Case{70,66,64},
+                        Case{66,71,64}, Case{86,90,64}, Case{90,86,64}}) {
+        int t = CoolingTemperature(sample.ec, sample.package, 100, 103, 104);
+        auto demand = CompileFanDemand(t, 70, t >= 78, false, false, false, 0);
+        int command = demand.level == 64 && !FanReadyForFull(7, 3488, 3488) ? 7 : demand.level;
+        std::printf("sim ec=%d ec_ms=100 package=%d package_ms=103 steer=%d cmd=%d reason=%s\n",
+                    sample.ec, sample.package, t, command, demand.reason);
+        assert(command == sample.expected);
+    }
     uint8_t value = 0;
     FakePorts delayed{{0, 2, 0, 0, 0, 1}};
     assert(TransferEcByte(delayed, 0x66, 0x62, 0x2f, value, false, 10));

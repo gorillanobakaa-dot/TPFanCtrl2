@@ -26,6 +26,7 @@ enum PORTACCESS_BACKEND {
 	PORTACCESS_TVICPORT,
 };
 
+int PortAccess_ReadIntelPackage();
 bool PortAccess_Open(void);
 void PortAccess_Close(void);
 

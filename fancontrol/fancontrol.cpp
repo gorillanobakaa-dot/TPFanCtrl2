@@ -126,9 +126,18 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	ppTbTextIcon(NULL),
 	pTextIconMutex(new MUTEXSEM(0, "Global\\TPFanControl_ppTbTextIcon")) {
 
+	char model[80] = {};
+	DWORD size = sizeof(model);
+	if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS", "SystemProductName",
+	                 RRF_RT_REG_SZ, NULL, model, &size) == ERROR_SUCCESS)
+		packageRequired = strncmp(model, "21C3", 4) == 0 || strncmp(model, "21C4", 4) == 0;
 	InitSensorNames();
 	InitSmartLevels();
 	this->ReadConfig("TPFanControl.ini");
+	if (packageRequired) {
+		strcpy_s(gSensorNames[0], "EC");
+		strcpy_s(gSensorNames[12], "DTS");
+	}
 	InitDialogWindow();
 	HandleStartupDelay();
 	SubscribePowerEvents();
@@ -1291,12 +1300,12 @@ ULONG FANCONTROL::OnTimer(WPARAM timerId) {
 		char pipeData[BUFFER_SIZE];
 		if (Fahrenheit) {
 			sprintf_s(pipeData, sizeof(pipeData), "%d %d %s %d %d %d ",
-				this->CurrentMode, (this->MaxTemp * 9 / 5 + 32), this->gSensorNames[iMaxTemp],
+				this->CurrentMode, (this->MaxTemp * 9 / 5 + 32), (packageRequired && iMaxTemp < 12 ? "EC" : this->gSensorNames[iMaxTemp]),
 				iFarbeIconB, fan1speed, fanctrl2);
 		}
 		else {
 			sprintf_s(pipeData, sizeof(pipeData), "%d %d %s %d %d %d ",
-				this->CurrentMode, (this->MaxTemp), this->gSensorNames[iMaxTemp],
+				this->CurrentMode, (this->MaxTemp), (packageRequired && iMaxTemp < 12 ? "EC" : this->gSensorNames[iMaxTemp]),
 				iFarbeIconB, fan1speed, fanctrl2);
 		}
 
@@ -1931,6 +1940,9 @@ void FANCONTROL::PullSharedState() {
 		return;
 
 	this->LastStateSeq = shared->stateSeq;
+	packageC = shared->packageC;
+	packageAt = shared->packageAt;
+	State.ecAt = shared->ecAt;
 
 	this->State.FanCtrl     = (char)shared->fanCtrl;
 	this->State.Fan1SpeedLo = (char)shared->fan1lo;
@@ -1939,6 +1951,7 @@ void FANCONTROL::PullSharedState() {
 	this->State.Fan2SpeedHi = (char)shared->fan2hi;
 
 	for (int i = 0; i < 12; i++) {
+		this->State.SensorAddr[i] = shared->sensorAddr[i];
 		this->State.Sensors[i] = (char)shared->sensors[i];
 		// ReadEcStatus never runs in a client, the name pointers stay null without this
 		this->State.SensorName[i] = this->gSensorNames[i];
@@ -2067,6 +2080,7 @@ FANCONTROL::UpdateTempDisplay(void)
 		int temp = this->State.Sensors[i];
 		BOOL show = (temp < 128 && temp != 0) || (this->ShowAll == 1);
 
+		if (packageRequired && i > 0) show = ShowAll;
 		if (show)
 		{
 			sprintf_s(buf, sizeof(buf), "%d", i + 1);
@@ -2075,9 +2089,10 @@ FANCONTROL::UpdateTempDisplay(void)
 			lvi.pszText = buf;
 			int idx = ListView_InsertItem(hLV, &lvi);
 
-			ListView_SetItemText(hLV, idx, 1, (LPSTR)this->State.SensorName[i]);
+			ListView_SetItemText(hLV, idx, 1, (LPSTR)(packageRequired ? "EC" : State.SensorName[i]));
 
-			if (temp < 128 && temp != 0)
+			if (packageRequired && i > 0) sprintf_s(buf, "raw %u", temp);
+			else if (temp < 128 && temp != 0)
 			{
 				if (Fahrenheit)
 					sprintf_s(buf, sizeof(buf), "%d F", temp * 9 / 5 + 32);
@@ -2094,6 +2109,17 @@ FANCONTROL::UpdateTempDisplay(void)
 		}
 	}
 
+	if (packageRequired) {
+		lvi.iItem = ListView_GetItemCount(hLV);
+		lvi.iSubItem = 0;
+		lvi.pszText = (LPSTR)"DTS";
+		int row = ListView_InsertItem(hLV, &lvi);
+		ListView_SetItemText(hLV, row, 1, (LPSTR)"Intel Package");
+		if (steeringC > 0) sprintf_s(buf, "%d %s", Fahrenheit ? packageC * 9 / 5 + 32 : packageC, Fahrenheit ? "F" : "C");
+		else strcpy_s(buf, "n/a");
+		ListView_SetItemText(hLV, row, 2, buf);
+		ListView_SetItemText(hLV, row, 3, (LPSTR)"MSR 0x1B1");
+	}
 	int count = ListView_GetItemCount(hLV);
 	if (topIndex > 0 && count > 0)
 	{
@@ -2103,7 +2129,7 @@ FANCONTROL::UpdateTempDisplay(void)
 	::SendMessage(hLV, WM_SETREDRAW, TRUE, 0);
 	::InvalidateRect(hLV, NULL, FALSE);
 
-	this->icontemp = this->State.Sensors[this->iMaxTemp];
+	this->icontemp = iMaxTemp == 12 ? packageC : this->State.Sensors[this->iMaxTemp];
 
 	// Invalidate header to update column 2 color based on MaxTemp
 	HWND hHeader = ListView_GetHeader(hLV);
@@ -2231,7 +2257,7 @@ void FANCONTROL::ProcessTextIcons(void) {
 				else
 					_itoa_s(this->icontemp, str_value, sizeof(str_value), 10);
 				sprintf_s(str_value, sizeof(str_value), "%s", str_value);
-				ppTbTextIcon[i]->ChangeText(str_value, this->gSensorNames[iMaxTemp], iFarbeIconB, iFontIconB, myszTip);
+				ppTbTextIcon[i]->ChangeText(str_value, (packageRequired && iMaxTemp < 12 ? "EC" : this->gSensorNames[iMaxTemp]), iFarbeIconB, iFontIconB, myszTip);
 			}
 		}
 		pTextIconMutex->Unlock();

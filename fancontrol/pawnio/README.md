@@ -17,6 +17,6 @@ The signed LpcThinkpadEC.bin module from PawnIO.Modules 0.2.12 is tried first.
 It checks for a Lenovo ThinkPad and a responding dedicated EC window. When
 available, the session uses this module exclusively. It exposes ports 0x1600
 through 0x161f. The existing ACPI module remains available on other machines.
-Both modules execute locally inside PawnIO. Neither opens a network connection.
+IntelMSR.bin from the same release supplies the local CPU package temperature on the Intel L15 Gen 3. The engine reads the thermal target and package status on every sample. All modules execute locally inside PawnIO. Neither opens a network connection.
 
 LpcThinkpadEC.bin SHA-256: 54bbf7f10d3511abfff167597485926ddf1587045f6ae849671cfaa85f97a1db

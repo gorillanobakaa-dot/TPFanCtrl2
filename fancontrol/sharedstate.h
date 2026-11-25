@@ -44,6 +44,9 @@ struct FCSHARED {
 
 	volatile LONG traceSeq;   // bumped by the engine for every line below
 	char traceLines[48][160]; // ring of engine log lines, mirrored by clients
+	int sensorAddr[12];
+	int packageC;
+	ULONGLONG ecAt, packageAt;
 };
 
 bool SharedState_Create();   // engine side, fails if it cannot be created

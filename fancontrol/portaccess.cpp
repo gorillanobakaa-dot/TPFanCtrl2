@@ -11,6 +11,7 @@
 #include "_prec.h"
 #include <winioctl.h>
 #include "portaccess.h"
+#include "fanpolicy.h"
 
 // PawnIO's device io control interface, from pawnio_um.h (the special
 // exception in PawnIO's license covers independent programs speaking it).
@@ -205,10 +206,10 @@ StartPawnIoDriver(void) {
 }
 
 static HANDLE
-PawnIoLoadModule(const PawnIoModule& mod) {
+LoadSignedModule(const char* file) {
 	FILE* f = NULL;
-	if (fopen_s(&f, mod.file, "rb") != 0 || !f) {
-		InitMessage("PawnIO driver found but %s is missing next to the program", mod.file);
+	if (fopen_s(&f, file, "rb") != 0 || !f) {
+		InitMessage("PawnIO driver found but %s is missing next to the program", file);
 		return INVALID_HANDLE_VALUE;
 	}
 
@@ -234,11 +235,30 @@ PawnIoLoadModule(const PawnIoModule& mod) {
 	fclose(f);
 
 	if (!loaded) {
-		InitMessage("PawnIO refused %s (wrong machine, unsigned or damaged module?)", mod.file);
+		InitMessage("PawnIO refused %s (wrong machine, unsigned or damaged module?)", file);
 		if (device != INVALID_HANDLE_VALUE) ::CloseHandle(device);
 		return INVALID_HANDLE_VALUE;
 	}
 
+	return device;
+}
+
+static HANDLE g_packageDevice = INVALID_HANDLE_VALUE;
+
+int PortAccess_ReadIntelPackage() {
+	if (g_packageDevice == INVALID_HANDLE_VALUE)
+		g_packageDevice = LoadSignedModule("IntelMSR.bin");
+	if (g_packageDevice == INVALID_HANDLE_VALUE) return -1;
+	ULONG64 targetIndex = 0x1a2, statusIndex = 0x1b1, target = 0, status = 0;
+	if (!PawnIoExecute(g_packageDevice, "ioctl_read_msr", &targetIndex, 1, &target, 1) ||
+	    !PawnIoExecute(g_packageDevice, "ioctl_read_msr", &statusIndex, 1, &status, 1))
+		return -1;
+	return DecodePackageTemperature(target, status);
+}
+
+static HANDLE PawnIoLoadModule(const PawnIoModule& mod) {
+	HANDLE device = LoadSignedModule(mod.file);
+	if (device == INVALID_HANDLE_VALUE) return device;
 	// a status read proves the module actually reaches the EC ports
 	ULONG64 in = mod.statusPort;
 	ULONG64 out = 0;
@@ -359,6 +379,10 @@ PortAccess_Open(void) {
 
 void
 PortAccess_Close(void) {
+	if (g_packageDevice != INVALID_HANDLE_VALUE) {
+		CloseHandle(g_packageDevice);
+		g_packageDevice = INVALID_HANDLE_VALUE;
+	}
 	switch (g_backend) {
 	case PORTACCESS_PAWNIO:
 		PawnIoClose();

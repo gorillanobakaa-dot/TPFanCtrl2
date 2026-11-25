@@ -62,6 +62,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "..\fancontrol\Release\TPFanControl.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\fancontrol\pawnio\LpcACPIEC.bin";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\fancontrol\pawnio\LpcThinkpadEC.bin";     DestDir: "{app}"; Flags: ignoreversion
+Source: "..\fancontrol\pawnio\IntelMSR.bin";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\fancontrol\pawnio\COPYING";           DestDir: "{app}\licences"; DestName: "LpcACPIEC-LGPL-2.1.txt"; Flags: ignoreversion
 Source: "..\LICENSE";                             DestDir: "{app}\licences"; DestName: "TPFanControl-Unlicense.txt"; Flags: ignoreversion
 Source: "THIRD-PARTY-NOTICES.txt";                DestDir: "{app}\licences"; Flags: ignoreversion

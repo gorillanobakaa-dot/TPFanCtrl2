@@ -63,6 +63,7 @@ protected:
 			Fan2SpeedLo,
 			Fan2SpeedHi;
 
+		ULONGLONG ecAt;
 		char Sensors[12];
 		int SensorAddr[12];
 		const char* SensorName[12];
@@ -131,6 +132,10 @@ protected:
 	// Gorilla mode (Gorilla fork): keep the CPU at GorillaTarget C, never run
 	// below fan level GorillaFloor. FanLevelRpm = measured rpm of levels 0-7
 	// and full speed (0x40), from FanLevelRpm= in the ini; 0 = not measured.
+	bool packageRequired = false;
+	int packageC = -1;
+	ULONGLONG packageAt = 0;
+	int steeringC = -1;
 	int GorillaTarget;
 	int GorillaFloor;
 	// Compile mode (Gorilla fork, mode 5): the fan follows the LOAD and the rate of rise, not only the

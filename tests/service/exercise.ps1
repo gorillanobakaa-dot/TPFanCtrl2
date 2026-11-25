@@ -27,9 +27,9 @@ function Scenario([int]$Cpu, [int]$Stall=0, [int]$RejectFixed=0, [int]$RejectBio
     [IO.File]::WriteAllText("$path.next","$Cpu $Stall $RejectFixed $RejectBios")
     [IO.File]::Move("$path.next",$path,$true)
 }
-function Start-Mode([int]$Mode, [int]$Cpu) {
+function Start-Mode([int]$Mode, [int]$Cpu, [int]$RequirePackage=0) {
     Scenario $Cpu
-    @("PortBackend=tvicport","SingleFan=1","Active=$Mode","Cycle=1","Log2File=1","Log2csv=1",
+    @("RequireIntelPackage=$RequirePackage","PortBackend=tvicport","SingleFan=1","Active=$Mode","Cycle=1","Log2File=1","Log2csv=1",
       "StartMinimized=1","NoWaitMessage=1","ManFanSpeed=3","ManModeExit=78","GorillaTarget=50",
       "GorillaFloor=2","CompileTarget=70","Level=0 4 0 0","Level=70 7 0 0",
       "FanLevelRpm=0 1765 2183 2588 2788 2986 3182 3488 4518") |
@@ -125,6 +125,10 @@ try {
     (Get-Service TPFanControl).WaitForStatus('Stopped',[timespan]::FromSeconds(20))
     Start-Mode 4 40
     Expect 'restart after process loss' {param($s) $s.fault -eq '1' -and $s.bios_verified -eq '1' -and $s.mode -eq '1'}
+    Stop-Engine
+    Start-Mode 4 40 1
+    Expect 'missing package hands back to firmware' {param($s) $s.package_c -eq '-1' -and
+        $s.sample_ok -eq '0' -and $s.fault -eq '1' -and $s.bios_verified -eq '1' -and $s.fan -eq '0x80'}
     Stop-Engine
     Start-Mode 4 0
     Expect 'invalid CPU startup' {param($s) $s.cpu -eq '-1' -and $s.fault -eq '1' -and $s.fan -eq '0x80'}
