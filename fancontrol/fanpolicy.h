@@ -48,13 +48,21 @@ inline int CoolingTemperature(int ec, int package, unsigned long long ecAt,
 	return ec > package ? ec : package;
 }
 
-inline const char* BoardChannelLabel(int address) {
-switch (address) {
-	case 0x78: return "Processor area (board sensor)";
-	case 0x7a: return "Card slot (legacy label)";
-	case 0x7e: return "Battery (legacy label)";
-	case 0xc1: return "Expansion bus (legacy label)";
-	case 0xc2: return "Power supply (legacy label)";
-	default: return "Unidentified board channel";
+// Board channels published in sensors-gorilla v3.0.3, win_sensors.rs.
+inline const char* BoardThermalLabel(int address) {
+	switch (address) {
+	case 0x78: return "Processor area";
+	case 0x79: return "Drive protection sensor";
+	case 0x7a: return "Card slot area";
+	case 0x7b: return "Graphics processor area";
+	case 0x7e: return "Battery area";
+	case 0xc0: return "System bus area";
+	case 0xc1: return "Expansion bus area";
+	case 0xc2: return "Power supply area";
+	default: return nullptr;
+	}
 }
+
+inline bool BoardThermalReading(int address, int value) {
+	return BoardThermalLabel(address) && value > 0 && value < 125;
 }
