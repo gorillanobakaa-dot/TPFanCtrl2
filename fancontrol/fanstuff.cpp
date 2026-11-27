@@ -745,8 +745,7 @@ void FANCONTROL::ShowFanSpeed(void) {
 	if (!SingleFan)
 		sprintf_s(buf, sizeof(buf), "%d / %d rpm  (%s)", this->fan1speed, this->fan2speed, lvl);
 	else if (full > 0)
-		sprintf_s(buf, sizeof(buf), "%d rpm  =  %d%% of full  (%s)", this->fan1speed,
-			(this->fan1speed * 100 + full / 2) / full, lvl);
+		sprintf_s(buf, sizeof(buf), "%d RPM  |  %s", this->fan1speed, lvl);
 	else
 		sprintf_s(buf, sizeof(buf), "%d rpm  (%s)", this->fan1speed, lvl);
 	::SetDlgItemText(this->hwndDialog, 8102, buf);

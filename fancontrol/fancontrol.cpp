@@ -245,11 +245,12 @@ void FANCONTROL::InitDialogWindow() {
 				RECT rc; ::GetClientRect(hLV, &rc);
 				int cw = rc.right - rc.left;
 				if (cw < 120) cw = 168;               // not laid out yet: old total
-				int w0 = cw * 14 / 100, w1 = cw * 30 / 100, w2 = cw * 30 / 100;
-				lvc.cx = w0; lvc.pszText = (LPSTR)"#"; ListView_InsertColumn(hLV, 0, &lvc);
-				lvc.cx = w1; lvc.pszText = (LPSTR)(packageRequired ? "Label" : "Name"); ListView_InsertColumn(hLV, 1, &lvc);
-				lvc.cx = w2; lvc.pszText = (LPSTR)"Temp"; ListView_InsertColumn(hLV, 2, &lvc);
-				lvc.cx = cw - w0 - w1 - w2; lvc.pszText = (LPSTR)"Addr"; ListView_InsertColumn(hLV, 3, &lvc);
+				const char* headings[] = {"Source", "Sensor or board channel", "Reading", "Hardware register"};
+				for (int column = 0; column < 4; ++column) {
+					lvc.cx = cw / 4;
+					lvc.pszText = const_cast<char*>(headings[column]);
+					ListView_InsertColumn(hLV, column, &lvc);
+				}
 			}
 		}
 
@@ -2083,15 +2084,24 @@ FANCONTROL::UpdateTempDisplay(void)
 
 		if (show)
 		{
-			sprintf_s(buf, sizeof(buf), "%d", i + 1);
-			lvi.iItem = i;
+			lvi.iItem = ListView_GetItemCount(hLV);
 			lvi.iSubItem = 0;
-			lvi.pszText = buf;
+			lvi.pszText = (LPSTR)"Board controller";
 			int idx = ListView_InsertItem(hLV, &lvi);
-
-			ListView_SetItemText(hLV, idx, 1, (LPSTR)State.SensorName[i]);
-
-			if (packageRequired && i > 0) sprintf_s(buf, "raw %u", temp);
+			const int address = State.SensorAddr[i];
+			const char* label = State.SensorName[i];
+			if (packageRequired) {
+				switch (address) {
+				case 0x78: label = "Processor area (board sensor)"; break;
+				case 0x7a: label = "Card slot (legacy label)"; break;
+				case 0x7e: label = "Battery (legacy label)"; break;
+				case 0xc1: label = "Expansion bus (legacy label)"; break;
+				case 0xc2: label = "Power supply (legacy label)"; break;
+				default: label = "Unidentified board channel"; break;
+				}
+			}
+			ListView_SetItemText(hLV, idx, 1, const_cast<char*>(label));
+			if (packageRequired && i > 0) sprintf_s(buf, "Byte %u (unit unknown)", static_cast<unsigned char>(temp));
 			else if (temp < 128 && temp != 0)
 			{
 				if (Fahrenheit)
@@ -2104,7 +2114,7 @@ FANCONTROL::UpdateTempDisplay(void)
 				strcpy_s(buf, sizeof(buf), "n/a");
 			}
 			ListView_SetItemText(hLV, idx, 2, buf);
-			sprintf_s(buf, sizeof(buf), "0x%02x", this->State.SensorAddr[i]);
+			sprintf_s(buf, sizeof(buf), "Board register 0x%02X", this->State.SensorAddr[i]);
 			ListView_SetItemText(hLV, idx, 3, buf);
 		}
 	}
@@ -2112,13 +2122,21 @@ FANCONTROL::UpdateTempDisplay(void)
 	if (packageRequired) {
 		lvi.iItem = ListView_GetItemCount(hLV);
 		lvi.iSubItem = 0;
-		lvi.pszText = (LPSTR)"DTS";
+		lvi.pszText = (LPSTR)"Intel processor";
 		int row = ListView_InsertItem(hLV, &lvi);
-		ListView_SetItemText(hLV, row, 1, (LPSTR)"Package");
+		ListView_SetItemText(hLV, row, 1, (LPSTR)"Processor chip temperature");
 		if (steeringC > 0) sprintf_s(buf, "%d %s", Fahrenheit ? packageC * 9 / 5 + 32 : packageC, Fahrenheit ? "F" : "C");
 		else strcpy_s(buf, "n/a");
 		ListView_SetItemText(hLV, row, 2, buf);
-		ListView_SetItemText(hLV, row, 3, (LPSTR)"0x1B1");
+		ListView_SetItemText(hLV, row, 3, (LPSTR)"Intel register 0x1B1");
+	}
+	// Size to the actual text in the active font, including the column headings.
+	for (int column = 0; column < 4; ++column) {
+		ListView_SetColumnWidth(hLV, column, LVSCW_AUTOSIZE);
+		int content = ListView_GetColumnWidth(hLV, column);
+		ListView_SetColumnWidth(hLV, column, LVSCW_AUTOSIZE_USEHEADER);
+		int header = ListView_GetColumnWidth(hLV, column);
+		ListView_SetColumnWidth(hLV, column, __max(content, header));
 	}
 	int count = ListView_GetItemCount(hLV);
 	if (topIndex > 0 && count > 0)
