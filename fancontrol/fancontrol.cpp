@@ -2083,19 +2083,22 @@ FANCONTROL::UpdateTempDisplay(void)
 		int temp = this->State.Sensors[i];
 		BOOL show = (temp < 128 && temp != 0) || (this->ShowAll == 1);
 
+		const int address = State.SensorAddr[i];
+		const char* boardLabel = BoardThermalLabel(address);
+		if (packageRequired) show = ShowAll || BoardThermalReading(address, temp);
 		if (show)
 		{
 			lvi.iItem = ListView_GetItemCount(hLV);
 			lvi.iSubItem = 0;
 			lvi.pszText = (LPSTR)"Board controller";
 			int idx = ListView_InsertItem(hLV, &lvi);
-			const int address = State.SensorAddr[i];
 			const char* label = State.SensorName[i];
 			if (packageRequired) {
-				label = BoardChannelLabel(address);
+				label = boardLabel ? boardLabel : "Firmware diagnostic register";
 			}
 			ListView_SetItemText(hLV, idx, 1, const_cast<char*>(label));
-			if (packageRequired && i > 0) sprintf_s(buf, "Byte %u (unit unknown)", static_cast<unsigned char>(temp));
+			if (packageRequired && !boardLabel) sprintf_s(buf, "Code %u", static_cast<unsigned char>(temp));
+			else if (packageRequired && !BoardThermalReading(address, temp)) strcpy_s(buf, "No reading");
 			else if (temp < 128 && temp != 0)
 			{
 				if (Fahrenheit)

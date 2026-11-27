@@ -207,9 +207,15 @@ bool FANCONTROL::HandleData(void) {
 	for (i = 0; i < 12; i++) {
 		int temp = this->State.Sensors[i];
 
-		if (packageRequired && i && !ShowAll && (temp == 0 || temp >= 128)) continue;
-		if (packageRequired && i) {
-			sprintf_s(obuf2, "%s EC[0x%02x] raw %u\r\n", State.SensorName[i], State.SensorAddr[i], temp);
+		if (packageRequired) {
+			int address = State.SensorAddr[i];
+			const char* label = BoardThermalLabel(address);
+			if (BoardThermalReading(address, temp))
+				sprintf_s(obuf2, "%s: %d %s (0x%02X)\r\n", label,
+				    Fahrenheit ? temp * 9 / 5 + 32 : temp, Fahrenheit ? "F" : "C", address);
+			else if (ShowAll)
+				sprintf_s(obuf2, "Register 0x%02X: code %u\r\n", address, static_cast<unsigned char>(temp));
+			else continue;
 			strcat_s(templist2, obuf2);
 			continue;
 		}
@@ -823,9 +829,11 @@ void FANCONTROL::WriteStatusFile(void) {
 	for (int i = 0; i < 12; ++i) {
 		char entry[160], reading[12] = "null";
 		int address = static_cast<unsigned char>(State.SensorAddr[i]);
-		if (fresh) sprintf_s(reading, "%u", static_cast<unsigned char>(State.Sensors[i]));
+		const int byte = static_cast<unsigned char>(State.Sensors[i]);
+		const char* label = BoardThermalLabel(address);
+		if (fresh && (!label || BoardThermalReading(address, byte))) sprintf_s(reading, "%d", byte);
 		sprintf_s(entry, "%s{\"register\":\"0x%02X\",\"label\":\"%s\",\"value\":%s,\"unit\":%s}",
-		    i ? "," : "", address, BoardChannelLabel(address), reading, i ? "null" : "\"C\"");
+		    i ? "," : "", address, label ? label : "Firmware diagnostic register", reading, label ? "\"C\"" : "null");
 		strcat_s(channels, entry);
 	}
 	strcat_s(channels, "]");
