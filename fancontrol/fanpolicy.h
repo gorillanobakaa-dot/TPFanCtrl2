@@ -57,7 +57,7 @@ inline const char* BoardThermalLabel(int address) {
 	case 0x7b: return "Graphics processor area";
 	case 0x7e: return "Battery area";
 	case 0xc0: return "System bus area";
-	case 0xc1: return "Expansion bus area";
+	// The L15 PCI register returns status code 1; expose it in diagnostics.
 	case 0xc2: return "Power supply area";
 	default: return nullptr;
 	}
