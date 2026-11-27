@@ -47,3 +47,14 @@ inline int CoolingTemperature(int ec, int package, unsigned long long ecAt,
 	    !ecAt || !packageAt || now - ecAt > 5000 || now - packageAt > 5000) return -1;
 	return ec > package ? ec : package;
 }
+
+inline const char* BoardChannelLabel(int address) {
+switch (address) {
+	case 0x78: return "Processor area (board sensor)";
+	case 0x7a: return "Card slot (legacy label)";
+	case 0x7e: return "Battery (legacy label)";
+	case 0xc1: return "Expansion bus (legacy label)";
+	case 0xc2: return "Power supply (legacy label)";
+	default: return "Unidentified board channel";
+}
+}

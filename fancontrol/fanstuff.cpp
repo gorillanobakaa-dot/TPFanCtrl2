@@ -734,20 +734,35 @@ bool FANCONTROL::GuardHold(void) {
 //  level the fan control set. The engine reads the rpm alone every second (ReadFanSpeedOnly); a client takes it
 //  from the shared state (PullFanSpeed).
 //-------------------------------------------------------------------------
+// Per-machine observation only. This file never participates in fan control.
+static int ObservedFanPeak(int verifiedFullRpm = 0) {
+	char dir[MAX_PATH], path[MAX_PATH];
+	DWORD n = GetEnvironmentVariableA("ProgramData", dir, MAX_PATH);
+	if (!n || n >= MAX_PATH || sprintf_s(path, "%s\\TPFanControl\\fan-observations.ini", dir) < 0) return 0;
+	int peak = GetPrivateProfileIntA("fan1", "full_peak_rpm", 0, path);
+	if (peak < 0 || peak > 8191) peak = 0;
+	if (verifiedFullRpm > peak && verifiedFullRpm <= 8191) {
+		char value[16];
+		sprintf_s(value, "%d", verifiedFullRpm);
+		WritePrivateProfileStringA("fan1", "full_peak_rpm", value, path);
+		peak = verifiedFullRpm;
+	}
+	return peak;
+}
+
 void FANCONTROL::ShowFanSpeed(void) {
 	char buf[128], lvl[24];
 	int fc = this->State.FanCtrl & 0xff;
 	if (fc == 0x40) strcpy_s(lvl, sizeof(lvl), "full speed");
 	else if (fc & 0x80) strcpy_s(lvl, sizeof(lvl), "BIOS decides");
 	else sprintf_s(lvl, sizeof(lvl), "level %d", fc & 0x07);
-	int full = 0;
-	for (int k = 0; k < 9; k++) if (this->FanLevelRpm[k] > full) full = this->FanLevelRpm[k];
+	int peak = ObservedFanPeak();
 	if (!SingleFan)
-		sprintf_s(buf, sizeof(buf), "%d / %d rpm  (%s)", this->fan1speed, this->fan2speed, lvl);
-	else if (full > 0)
-		sprintf_s(buf, sizeof(buf), "%d RPM  |  %s", this->fan1speed, lvl);
+		sprintf_s(buf, "%d / %d RPM (%s)", fan1speed, fan2speed, lvl);
+	else if (peak > 0)
+		sprintf_s(buf, "%d RPM out of %d RPM observed", fan1speed, peak);
 	else
-		sprintf_s(buf, sizeof(buf), "%d rpm  (%s)", this->fan1speed, lvl);
+		sprintf_s(buf, "%d RPM (maximum unknown)", fan1speed);
 	::SetDlgItemText(this->hwndDialog, 8102, buf);
 }
 
@@ -774,7 +789,7 @@ void FANCONTROL::WriteStatusFile(void) {
 	if (n == 0 || n >= sizeof(dir)) return;
 	strcat_s(dir, sizeof(dir), "\\TPFanControl");
 	::CreateDirectoryA(dir, NULL);
-	char tmp[MAX_PATH], fin[MAX_PATH], line[768];
+	char tmp[MAX_PATH], fin[MAX_PATH], line[4096];
 	sprintf_s(tmp, sizeof(tmp), "%s\\status.txt.tmp", dir);
 	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
 	int cpu = this->State.Sensors[0];
@@ -801,6 +816,19 @@ void FANCONTROL::WriteStatusFile(void) {
 	char rpm[16] = "null", pkg[16] = "null", ec[16] = "null";
 	if (!ReadErrorCount && tach >= 0 && tach <= 0x1fff) sprintf_s(rpm, "%d", tach);
 	if (fresh) { sprintf_s(pkg, "%d", packageC); sprintf_s(ec, "%d", cpu); }
+	const bool verifiedFull = fresh && !coolingFault && static_cast<unsigned char>(State.FanCtrl) == 64;
+	const int peak = ObservedFanPeak(verifiedFull ? tach : 0);
+	char peakText[16] = "null", channels[2048] = "[";
+	if (peak > 0) sprintf_s(peakText, "%d", peak);
+	for (int i = 0; i < 12; ++i) {
+		char entry[160], reading[12] = "null";
+		int address = static_cast<unsigned char>(State.SensorAddr[i]);
+		if (fresh) sprintf_s(reading, "%u", static_cast<unsigned char>(State.Sensors[i]));
+		sprintf_s(entry, "%s{\"register\":\"0x%02X\",\"label\":\"%s\",\"value\":%s,\"unit\":%s}",
+		    i ? "," : "", address, BoardChannelLabel(address), reading, i ? "null" : "\"C\"");
+		strcat_s(channels, entry);
+	}
+	strcat_s(channels, "]");
 	const int target = CurrentMode == 4 || CurrentMode == 5 ?
 	    liveTarget(CurrentMode == 4 ? GorillaTarget : CompileTarget) : -1;
 	sprintf_s(coolingSummary, "%s | Intel %s C | Board %s C | %s RPM | %s W | %s",
@@ -814,10 +842,10 @@ void FANCONTROL::WriteStatusFile(void) {
 	sprintf_s(fin, "%s\\cooling-%04u-%02u-%02u.jsonl", dir, utc.wYear, utc.wMonth, utc.wDay);
 	sprintf_s(line, "{\"utc\":\"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ\",\"uptime_ms\":%llu,"
 	    "\"mode\":\"%s\",\"fan_register\":%d,\"requested_level\":%d,\"target_c\":%d,\"package_c\":%s,\"ec_c\":%s,\"rpm\":%s,\"package_w\":%s,"
-	    "\"windows_limit_flags\":%d,\"windows_limit_pct\":%d,\"reported_mhz\":%d,\"core_limit_bits\":%d,\"thermal_history\":%d,\"thermal_active\":%s,\"power_limit_active\":%s,\"fault\":%s,\"fault_reason\":\"%s\","
+	    "\"max_observed_full_rpm\":%s,\"manufacturer_max_rpm\":null,\"full_command\":64,\"fixed_levels\":[0,1,2,3,4,5,6,7],\"board_channels\":%s,\"windows_limit_flags\":%d,\"windows_limit_pct\":%d,\"reported_mhz\":%d,\"core_limit_bits\":%d,\"thermal_history\":%d,\"thermal_active\":%s,\"power_limit_active\":%s,\"fault\":%s,\"fault_reason\":\"%s\","
 	    "\"bios_verified\":%s,\"sample_ok\":%s}\r\n", utc.wYear, utc.wMonth, utc.wDay,
 	    utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds, GetTickCount64(), owner, static_cast<unsigned char>(State.FanCtrl),
-	    CurrentMode == 4 || CurrentMode == 5 ? LastWant : -1, target, pkg, ec, rpm, watts, power.windowsLimitFlags, power.windowsLimitPercent,
+	    CurrentMode == 4 || CurrentMode == 5 ? LastWant : -1, target, pkg, ec, rpm, watts, peakText, channels, power.windowsLimitFlags, power.windowsLimitPercent,
 	    power.reportedMHz, power.coreLimitBits, power.thermalHistory, power.thermal < 0 ? "null" : power.thermal ? "true" : "false",
 	    power.powerLimit < 0 ? "null" : power.powerLimit ? "true" : "false",
 	    coolingFault ? "true" : "false", faultReason, biosConfirmed ? "true" : "false", fresh ? "true" : "false");
