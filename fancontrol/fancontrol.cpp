@@ -15,6 +15,7 @@
 // 
 // --------------------------------------------------------------
 #include "_prec.h"
+#include "fanpolicy.h"
 #include "fancontrol.h"
 #include "taskbartexticon.h"
 #include "sharedstate.h"
@@ -2091,14 +2092,7 @@ FANCONTROL::UpdateTempDisplay(void)
 			const int address = State.SensorAddr[i];
 			const char* label = State.SensorName[i];
 			if (packageRequired) {
-				switch (address) {
-				case 0x78: label = "Processor area (board sensor)"; break;
-				case 0x7a: label = "Card slot (legacy label)"; break;
-				case 0x7e: label = "Battery (legacy label)"; break;
-				case 0xc1: label = "Expansion bus (legacy label)"; break;
-				case 0xc2: label = "Power supply (legacy label)"; break;
-				default: label = "Unidentified board channel"; break;
-				}
+				label = BoardChannelLabel(address);
 			}
 			ListView_SetItemText(hLV, idx, 1, const_cast<char*>(label));
 			if (packageRequired && i > 0) sprintf_s(buf, "Byte %u (unit unknown)", static_cast<unsigned char>(temp));
