@@ -2094,7 +2094,7 @@ FANCONTROL::UpdateTempDisplay(void)
 			int idx = ListView_InsertItem(hLV, &lvi);
 			const char* label = State.SensorName[i];
 			if (packageRequired) {
-				label = boardLabel ? boardLabel : "Firmware diagnostic register";
+				label = boardLabel ? boardLabel : (address == 0xc1 ? "Expansion bus register" : "Firmware diagnostic register");
 			}
 			ListView_SetItemText(hLV, idx, 1, const_cast<char*>(label));
 			if (packageRequired && !boardLabel) sprintf_s(buf, "Code %u", static_cast<unsigned char>(temp));

@@ -833,7 +833,7 @@ void FANCONTROL::WriteStatusFile(void) {
 		const char* label = BoardThermalLabel(address);
 		if (fresh && (!label || BoardThermalReading(address, byte))) sprintf_s(reading, "%d", byte);
 		sprintf_s(entry, "%s{\"register\":\"0x%02X\",\"label\":\"%s\",\"value\":%s,\"unit\":%s}",
-		    i ? "," : "", address, label ? label : "Firmware diagnostic register", reading, label ? "\"C\"" : "null");
+		    i ? "," : "", address, label ? label : (address == 0xc1 ? "Expansion bus register" : "Firmware diagnostic register"), reading, label ? "\"C\"" : "null");
 		strcat_s(channels, entry);
 	}
 	strcat_s(channels, "]");
