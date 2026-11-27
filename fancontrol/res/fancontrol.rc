@@ -51,14 +51,14 @@ BEGIN
     COMBOBOX        8310,529,96,176,150,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Gorilla (cooling first)",8303,"Button",BS_AUTORADIOBUTTON,487,113,100,10
     CONTROL         "Compile (Firefox && kernel)",8304,"Button",BS_AUTORADIOBUTTON,592,113,115,10
-    LTEXT           "keep CPU at",8633,189,129,42,8
+    LTEXT           "keep CPU at",8323,499,129,42,8
     COMBOBOX        8320,542,127,40,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "never slower than",8324,357,129,58,8
+    LTEXT           "never slower than",8324,587,129,58,8
     COMBOBOX        8321,645,127,60,150,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.",8632,151,145,244,44
-    GROUPBOX        "Log (see TPFanControl.log)",7,198,705,76,171
+    LTEXT           "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.",8322,461,145,244,44
+    GROUPBOX        "Log (see TPFanControl.log)",9201,7,198,705,76
     EDITTEXT        9200,15,209,689,58,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY | ES_WANTRETURN | WS_VSCROLL | WS_HSCROLL
-    GROUPBOX        "Live cooling",9509,145,198,567,27
+    GROUPBOX        "Live cooling",9199,7,278,705,27
     EDITTEXT        8112,13,287,573,13,ES_AUTOHSCROLL | ES_READONLY
     LTEXT           "Last",IDC_STATIC,590,288,15,8
     EDITTEXT        8113,608,287,99,13,ES_AUTOHSCROLL | ES_READONLY
@@ -116,14 +116,14 @@ BEGIN
     COMBOBOX        8310,529,96,176,150,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Gorilla (cooling first)",8303,"Button",BS_AUTORADIOBUTTON,487,113,100,10
     CONTROL         "Compile (Firefox && kernel)",8304,"Button",BS_AUTORADIOBUTTON,592,113,115,10
-    LTEXT           "keep CPU at",8633,189,129,42,8
+    LTEXT           "keep CPU at",8323,499,129,42,8
     COMBOBOX        8320,542,127,40,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "never slower than",8324,357,129,58,8
+    LTEXT           "never slower than",8324,587,129,58,8
     COMBOBOX        8321,645,127,60,150,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.",8632,151,145,244,44
-    GROUPBOX        "Log (see TPFanControl.log)",7,198,705,76,171
+    LTEXT           "Gorilla: full speed at the CPU target, level 7 within 5 C of it, never below the minimum. Noise is not a factor.",8322,461,145,244,44
+    GROUPBOX        "Log (see TPFanControl.log)",9201,7,198,705,76
     EDITTEXT        9200,15,209,689,58,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY | ES_WANTRETURN | WS_VSCROLL | WS_HSCROLL
-    GROUPBOX        "Live cooling",9509,145,198,567,27
+    GROUPBOX        "Live cooling",9199,7,278,705,27
     EDITTEXT        8112,13,287,573,13,ES_AUTOHSCROLL | ES_READONLY
     LTEXT           "Last",IDC_STATIC,590,288,15,8
     EDITTEXT        8113,608,287,99,13,ES_AUTOHSCROLL | ES_READONLY
