@@ -284,6 +284,10 @@ protected:
 	bool SelectFanBank(char bank);
 	ULONGLONG levelSince = 0;
 	int monitoredLevel = -1;
+	char coolingSummary[180] = "";
+	int floorBoost = 0, floorMode = 0;
+	int liveTarget(int configured) const;
+	const char* faultReason = "none";
 	bool biosConfirmed = false;
 	bool startupChecked = false;
 	bool discardWorkerSample = false;

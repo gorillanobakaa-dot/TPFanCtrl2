@@ -213,7 +213,7 @@ FANCONTROL::ReadConfig(const char* configfile)
 			// Compile mode (Gorilla fork): the CPU target for builds; out of range = default 70
 			if (_strnicmp(buf, "CompileTarget=", 14) == 0) {
 				int v = atoi(buf + 14);
-				if (v >= 55 && v <= 85) this->CompileTarget = v;
+				if (v >= 50 && v <= 85) this->CompileTarget = v;
 				continue;
 			}
 			// FanLevelRpm=r0 r1 r2 r3 r4 r5 r6 r7 rFull : measured rpm per level

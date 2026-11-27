@@ -110,6 +110,11 @@ try {
 
     Start-Mode 5 48
     Expect 'Compile startup' {param($s) $s.mode -eq '5' -and $s.fault -eq '0' -and $s.fan -in '0x04','0x05','0x07'}
+    $client = Start-Process $app -ArgumentList '--target compile 50' -PassThru -Wait
+    if ($client.ExitCode -ne 0) { throw "Target command failed: $($client.ExitCode)" }
+    Expect 'live Compile target' {param($s) $s.target_c -eq '50' -and $s.mode -eq '5'}
+    $client = Start-Process $app -ArgumentList '--target compile 71' -PassThru -Wait
+    if ($client.ExitCode -ne 2) { throw 'Out-of-range target accepted' }
     [IO.File]::WriteAllText($guard,'CI simulated workload')
     Expect 'Compile guard full' {param($s) $s.fan -eq '0x40' -and $s.rpm -eq '4518' -and $s.why -eq 'guard'}
     Remove-Item -LiteralPath $guard

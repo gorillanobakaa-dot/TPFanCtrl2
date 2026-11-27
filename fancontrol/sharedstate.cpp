@@ -12,7 +12,7 @@
 #include "sharedstate.h"
 #include "winstuff.h"
 
-static const char* SHARED_NAME = "Global\\TPFanControl_State";
+static const char* SHARED_NAME = "Global\\TPFanControl_State_v2";
 
 static HANDLE s_map = NULL;
 static FCSHARED* s_view = NULL;

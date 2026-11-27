@@ -26,6 +26,9 @@ enum PORTACCESS_BACKEND {
 	PORTACCESS_TVICPORT,
 };
 
+struct IntelCoolingSample { double watts = -1; int thermal = -1, powerLimit = -1, thermalHistory = -1, coreLimitBits = -1;
+	int windowsLimitFlags = -1, windowsLimitPercent = -1, reportedMHz = -1; };
+IntelCoolingSample PortAccess_ReadCoolingPower();
 int PortAccess_ReadIntelPackage();
 bool PortAccess_Open(void);
 void PortAccess_Close(void);

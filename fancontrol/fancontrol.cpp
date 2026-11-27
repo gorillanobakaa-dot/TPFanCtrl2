@@ -99,7 +99,7 @@ FANCONTROL::FANCONTROL(HINSTANCE hinstapp)
 	CaptionHoverColor(RGB(0x00, 0xB4, 0xFF)),   // bright azure (Gorilla fork)
 	GorillaTarget(45),                           // CPU target, C (Gorilla fork)
 	GorillaFloor(5),                             // never below level 5 in Gorilla mode
-	CompileTarget(70), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastWant(-1), LastT(0), LastPrev(0), CtlCalls(0), FullHoldUntil(0), LastRaiseTick(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
+	CompileTarget(50), LoadPct(0), BusySamples(0), LastCpuTemp(0), LastWant(-1), LastT(0), LastPrev(0), CtlCalls(0), FullHoldUntil(0), LastRaiseTick(0), LastIdleT(0), LastKernelT(0), LastUserT(0),
 	NoWaitMessage(TRUE),
 	MinimizeOnClose(TRUE),
 	Runs_as_service(FALSE),
@@ -568,7 +568,7 @@ void FANCONTROL::ModeText(int mode, char* buf, size_t n) const {
 		sprintf_s(buf, n, "Compile, for heavy work: full speed for the whole of every fieldkit guard job, otherwise "
 			"full speed from %d C or on a fast rise, never below level 4, and down one step at a time. The fan cannot "
 			"cap the heat: fieldkit thermal watch (started at logon) lowers the CPU cap above %d C.",
-			this->CompileTarget, this->CompileTarget);
+			liveTarget(this->CompileTarget), liveTarget(this->CompileTarget));
 		break;
 	default:
 		sprintf_s(buf, n, "Gorilla, for everyday use: keeps the CPU at the target you pick below and never runs "
@@ -1940,6 +1940,7 @@ void FANCONTROL::PullSharedState() {
 		return;
 
 	this->LastStateSeq = shared->stateSeq;
+	strncpy_s(coolingSummary, shared->coolingSummary, _TRUNCATE);
 	packageC = shared->packageC;
 	packageAt = shared->packageAt;
 	State.ecAt = shared->ecAt;
