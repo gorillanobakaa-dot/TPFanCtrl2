@@ -10,6 +10,8 @@
 
 #include "_prec.h"
 #include <winioctl.h>
+#include <pdh.h>
+#pragma comment(lib, "pdh.lib")
 #include "portaccess.h"
 #include "fanpolicy.h"
 
@@ -254,6 +256,62 @@ int PortAccess_ReadIntelPackage() {
 	    !PawnIoExecute(g_packageDevice, "ioctl_read_msr", &statusIndex, 1, &status, 1))
 		return -1;
 	return DecodePackageTemperature(target, status);
+}
+
+namespace {
+struct WindowsCoolingCounters {
+	PDH_HQUERY query = NULL;
+	PDH_HCOUNTER flags = NULL, percent = NULL, mhz = NULL;
+	WindowsCoolingCounters() {
+		if (PdhOpenQueryA(NULL, 0, &query) != ERROR_SUCCESS) return;
+		PdhAddEnglishCounterA(query, "\\Processor Information(_Total)\\Performance Limit Flags", 0, &flags);
+		PdhAddEnglishCounterA(query, "\\Processor Information(_Total)\\% Performance Limit", 0, &percent);
+		PdhAddEnglishCounterA(query, "\\Processor Information(_Total)\\Processor Frequency", 0, &mhz);
+	}
+	~WindowsCoolingCounters() { if (query) PdhCloseQuery(query); }
+	static int value(PDH_HCOUNTER counter) {
+		PDH_FMT_COUNTERVALUE v = {};
+		if (!counter || PdhGetFormattedCounterValue(counter, PDH_FMT_LONG | PDH_FMT_NOCAP100,
+		    NULL, &v) != ERROR_SUCCESS || v.CStatus > 1) return -1;
+		return v.longValue;
+	}
+};
+}
+
+IntelCoolingSample PortAccess_ReadCoolingPower() {
+	IntelCoolingSample sample;
+	static WindowsCoolingCounters counters;
+	if (counters.query && PdhCollectQueryData(counters.query) == ERROR_SUCCESS) {
+		sample.windowsLimitFlags = counters.value(counters.flags);
+		sample.windowsLimitPercent = counters.value(counters.percent);
+		sample.reportedMHz = counters.value(counters.mhz);
+	}
+	if (g_packageDevice == INVALID_HANDLE_VALUE) return sample;
+	auto read = [](ULONG64 index, ULONG64& value) {
+		return PawnIoExecute(g_packageDevice, "ioctl_read_msr", &index, 1, &value, 1);
+	};
+	ULONG64 status = 0, units = 0, energy = 0, limits = 0;
+	if (read(0x64f, limits)) sample.coreLimitBits = static_cast<int>(limits & 0xffff);
+	if (read(0x1b1, status) && (status & (1ULL << 31))) {
+		sample.thermal = static_cast<int>(status & 1);
+		sample.thermalHistory = static_cast<int>((status >> 1) & 1);
+		sample.powerLimit = static_cast<int>((status >> 10) & 1);
+	}
+	static DWORD previousEnergy = 0;
+	static ULONGLONG previousTick = 0;
+	if (!read(0x606, units) || !read(0x611, energy)) {
+		previousTick = 0;
+		return sample;
+	}
+	const ULONGLONG now = GetTickCount64(), elapsed = now - previousTick;
+	const DWORD counter = static_cast<DWORD>(energy);
+	if (previousTick && elapsed && elapsed <= 15000) {
+		const DWORD delta = counter - previousEnergy;
+		sample.watts = delta * 1000.0 / (1ULL << ((units >> 8) & 31)) / elapsed;
+	}
+	previousTick = now;
+	previousEnergy = counter;
+	return sample;
 }
 
 static HANDLE PawnIoLoadModule(const PawnIoModule& mod) {

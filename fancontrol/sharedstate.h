@@ -47,6 +47,8 @@ struct FCSHARED {
 	int sensorAddr[12];
 	int packageC;
 	ULONGLONG ecAt, packageAt;
+	char coolingSummary[180];
+	volatile LONG requestedTarget[2], observedTarget[2];
 };
 
 bool SharedState_Create();   // engine side, fails if it cannot be created

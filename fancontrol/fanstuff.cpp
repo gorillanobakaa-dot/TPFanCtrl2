@@ -174,6 +174,8 @@ bool FANCONTROL::HandleData(void) {
 
 	strcpy_s(this->Title2, sizeof(this->Title2), title2);
 
+	if (packageRequired && g_clientMode && coolingSummary[0])
+		strcpy_s(CurrentStatus, coolingSummary);
 	// display fan speeds
 	this->lastfan1speed = this->fan1speed;
 	this->fan1speed = (this->State.Fan1SpeedHi << 8) | this->State.Fan1SpeedLo;
@@ -324,6 +326,21 @@ bool FANCONTROL::HandleData(void) {
 	// a client leaves the user's choice here for the engine to act on
 	FCSHARED* shared = SharedState();
 	int requestedMode = -1;
+	if (coolingFault && shared && shared->cmdSeq != LastCmdSeq) {
+		const bool fresh = packageRequired && CoolingTemperature(State.Sensors[0], packageC,
+		    State.ecAt, packageAt, GetTickCount64()) > 0;
+		if ((shared->cmdMode == 4 || shared->cmdMode == 5) && shared->cmdSmart == -1 &&
+		    fresh && biosConfirmed && static_cast<unsigned char>(State.FanCtrl) == 0x80) {
+			coolingFault = false;
+			faultReason = "none";
+			noRotationSince = 0;
+			monitoredLevel = -1;
+			Trace("New cooling request: BIOS confirmed, feedback fresh; checking fan startup");
+		} else {
+			LastCmdSeq = shared->cmdSeq;
+			Trace("Cooling request rejected: safety handback or fresh readings required");
+		}
+	}
 	if (!coolingFault && shared && shared->cmdSeq != this->LastCmdSeq) {
 		this->LastCmdSeq = shared->cmdSeq;
 
@@ -368,6 +385,11 @@ bool FANCONTROL::HandleData(void) {
 	const int rpm1 = (State.Fan1SpeedHi << 8) | State.Fan1SpeedLo;
 	const int rpm2 = (State.Fan2SpeedHi << 8) | State.Fan2SpeedLo;
 	const ULONGLONG sampledAt = GetTickCount64();
+	if (floorMode != CurrentMode) {
+		floorMode = CurrentMode;
+		floorBoost = 0;
+		levelSince = sampledAt;
+	}
 	if (monitoredLevel != static_cast<int>(level)) {
 		monitoredLevel = level;
 		levelSince = sampledAt;
@@ -375,6 +397,15 @@ bool FANCONTROL::HandleData(void) {
 	// After settling, compare fan 1 with its own calibration if available.
 	// Full/disengaged can take longer to spin up than a regulated level.
 	const int index = level == 64 ? 8 : (level <= 7 ? static_cast<int>(level) : -1);
+	if (packageRequired && (CurrentMode == 4 || CurrentMode == 5) && index > 0 &&
+	    FanLevelRpm[8] > 0 && rpm1 > 0 && rpm1 <= 0x1fff &&
+	    sampledAt - levelSince >= 30000 && rpm1 * 100LL < FanLevelRpm[8] * 48LL) {
+		if (level >= 7) {
+			faultReason = "rpm_below_floor_at_high_level";
+			return false;
+		}
+		floorBoost = static_cast<int>(level) + 1;
+	}
 	if (CurrentMode >= 2 && index > 0 && FanLevelRpm[index] > 0
 		&& sampledAt - levelSince >= (level == 64 ? 120000ULL : 30000ULL)
 		&& rpm1 * 100LL < FanLevelRpm[index] * 75LL)
@@ -383,7 +414,10 @@ bool FANCONTROL::HandleData(void) {
 		&& (rpm1 == 0 || rpm1 > 0x1fff || (!SingleFan && (rpm2 == 0 || rpm2 > 0x1fff)))) {
 		const ULONGLONG now = GetTickCount64();
 		if (!noRotationSince) noRotationSince = now;
-		if (now - noRotationSince >= 15000) return false;
+		if (now - noRotationSince >= 15000) {
+			faultReason = "fan_stopped_or_invalid_tach";
+			return false;
+		}
 	} else {
 		noRotationSince = 0;
 	}
@@ -498,6 +532,11 @@ bool FANCONTROL::HandleData(void) {
 	if (ok && shared) {
 		shared->ackSeq = coolingFault ? shared->cmdSeq : this->LastCmdSeq;
 		shared->mode = this->CurrentMode;
+		for (int i = 0; i < 2; i++) {
+			const LONG requested = shared->requestedTarget[i];
+			InterlockedExchange(&shared->observedTarget[i], requested >= 40 && requested <= 70 ?
+			    requested : (i ? CompileTarget : GorillaTarget));
+		}
 		shared->smartLevel = this->IndSmartLevel;
 		shared->gorillaTarget = this->GorillaTarget;
 		shared->gorillaFloor = this->GorillaFloor;
@@ -538,18 +577,29 @@ bool FANCONTROL::HandleData(void) {
 //  Steps down only 2 C below the threshold that raised the fan, so it does
 //  not hunt. Full speed uses the same staircase as Smart and Manual.
 //-------------------------------------------------------------------------
+int FANCONTROL::liveTarget(int configured) const {
+	const auto* shared = SharedState();
+	if (shared) {
+		const LONG target = shared->requestedTarget[CurrentMode == 5 ? 1 : 0];
+		if (target >= 40 && target <= 70) return static_cast<int>(target);
+	}
+	return configured;
+}
+
 bool FANCONTROL::GorillaControl(void) {
 	int cpu = this->State.Sensors[0];
 	int t = steeringC;
-	int target = this->GorillaTarget;
+	int target = liveTarget(this->GorillaTarget);
 	int floor = this->GorillaFloor;
 	int cur = this->State.FanCtrl;
 	bool hot = (__max(cpu, __max(this->MaxTemp, rawSafetyTemp)) >= this->ManModeExitInternal);
 
 	int want = GorillaFanLevel(t, target, floor, cur, hot, GuardHold());
+	want = __max(floorBoost, want);
 	if (want == 64 && !FanReadyForFull(cur, fan1speed, FanLevelRpm[7]))
 		want = 7;                                       // spin up regulated first (as Smart)
 
+	LastWant = want;
 	return want == cur || this->SetFan("Gorilla", want);
 }
 
@@ -574,7 +624,7 @@ bool FANCONTROL::GorillaControl(void) {
 bool FANCONTROL::CompileControl(void) {
 	int cpu = this->State.Sensors[0];
 	int t = steeringC;
-	int target = this->CompileTarget;
+	int target = liveTarget(this->CompileTarget);
 	int cur = this->State.FanCtrl;
 	bool hot = (__max(cpu, __max(this->MaxTemp, rawSafetyTemp)) >= this->ManModeExitInternal);
 	const ULONGLONG tick = GetTickCount64();
@@ -596,7 +646,7 @@ bool FANCONTROL::CompileControl(void) {
 	this->CtlCalls++;
 	bool guard = GuardHold();
 	const auto demand = CompileFanDemand(t, target, hot, rising, guard, busy, BusySamples);
-	int want = demand.level;
+	int want = __max(floorBoost, demand.level);
 	const char* why = demand.reason;
 
 	// Full speed, once engaged, is held for at least 30 s unless the CPU is far below the target. Without it a
@@ -725,21 +775,59 @@ void FANCONTROL::WriteStatusFile(void) {
 	if (n == 0 || n >= sizeof(dir)) return;
 	strcat_s(dir, sizeof(dir), "\\TPFanControl");
 	::CreateDirectoryA(dir, NULL);
-	char tmp[MAX_PATH], fin[MAX_PATH], line[512];
+	char tmp[MAX_PATH], fin[MAX_PATH], line[768];
 	sprintf_s(tmp, sizeof(tmp), "%s\\status.txt.tmp", dir);
 	sprintf_s(fin, sizeof(fin), "%s\\status.txt", dir);
 	int cpu = this->State.Sensors[0];
 	// Keep the original fields for harnesses and include both measured inputs.
-	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u;fault=%d;bios_verified=%d;sample_ok=%d;ec_c=%d;ec_ms=%llu;package_c=%d;package_ms=%llu;steer_c=%d\r\n",
+	sprintf_s(line, sizeof(line), "ts=%lu;mode=%d;cpu=%d;max=%d;load=%d;fan=0x%02x;rpm=%d;want=0x%02x;why=%s;t=%d;prev=%d;n=%u;fault=%d;bios_verified=%d;sample_ok=%d;ec_c=%d;ec_ms=%llu;package_c=%d;package_ms=%llu;steer_c=%d;target_c=%d;fault_reason=%s\r\n",
 		(unsigned long)::GetTickCount64(), this->CurrentMode, (cpu > 0 && cpu < 128) ? cpu : -1, this->MaxTemp,
 		this->LoadPct, this->State.FanCtrl, this->fan1speed, this->LastWant & 0xff, this->CtlCalls ? this->LastWhy : "none",
-		this->LastT, this->LastPrev, this->CtlCalls, coolingFault, biosConfirmed, ReadErrorCount == 0 && (!packageRequired || steeringC > 0), cpu, State.ecAt, packageC, packageAt, steeringC);
+		this->LastT, this->LastPrev, this->CtlCalls, coolingFault, biosConfirmed, ReadErrorCount == 0 && (!packageRequired || steeringC > 0), cpu, State.ecAt, packageC, packageAt, steeringC, CurrentMode == 4 || CurrentMode == 5 ? liveTarget(CurrentMode == 4 ? GorillaTarget : CompileTarget) : -1, faultReason);
 	HANDLE h = ::CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (h == INVALID_HANDLE_VALUE) return;
 	DWORD w = 0;
 	::WriteFile(h, line, (DWORD)strlen(line), &w, NULL);
 	::CloseHandle(h);
 	::MoveFileExA(tmp, fin, MOVEFILE_REPLACE_EXISTING);
+	if (!packageRequired) return;
+	const auto power = PortAccess_ReadCoolingPower();
+	char watts[32] = "null";
+	if (power.watts >= 0) sprintf_s(watts, "%.2f", power.watts);
+	const char* owner = CurrentMode == 1 ? "BIOS" : CurrentMode == 5 ? "Compile" :
+	    CurrentMode == 4 ? "Gorilla" : CurrentMode == 3 ? "Manual" : "Smart";
+	const bool fresh = ReadErrorCount == 0 && CoolingTemperature(cpu, packageC, State.ecAt,
+	    packageAt, GetTickCount64()) > 0;
+	const int tach = (State.Fan1SpeedHi << 8) | State.Fan1SpeedLo;
+	char rpm[16] = "null", pkg[16] = "null", ec[16] = "null";
+	if (!ReadErrorCount && tach >= 0 && tach <= 0x1fff) sprintf_s(rpm, "%d", tach);
+	if (fresh) { sprintf_s(pkg, "%d", packageC); sprintf_s(ec, "%d", cpu); }
+	const int target = CurrentMode == 4 || CurrentMode == 5 ?
+	    liveTarget(CurrentMode == 4 ? GorillaTarget : CompileTarget) : -1;
+	sprintf_s(coolingSummary, "%s | Intel %s C | Board %s C | %s RPM | %s W | %s",
+	    owner, pkg, ec, rpm, watts, coolingFault ? faultReason :
+	    power.thermal == 1 ? "Thermal limit active" : power.powerLimit == 1 ? "Power limit active" :
+	    power.windowsLimitFlags > 0 ? "Windows performance limit active" :
+	    power.thermal < 0 ? "Limit data unavailable" : "No package thermal/power flag");
+	if (auto* shared = SharedState()) strcpy_s(shared->coolingSummary, coolingSummary);
+	SYSTEMTIME utc;
+	GetSystemTime(&utc);
+	sprintf_s(fin, "%s\\cooling-%04u-%02u-%02u.jsonl", dir, utc.wYear, utc.wMonth, utc.wDay);
+	sprintf_s(line, "{\"utc\":\"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ\",\"uptime_ms\":%llu,"
+	    "\"mode\":\"%s\",\"fan_register\":%d,\"requested_level\":%d,\"target_c\":%d,\"package_c\":%s,\"ec_c\":%s,\"rpm\":%s,\"package_w\":%s,"
+	    "\"windows_limit_flags\":%d,\"windows_limit_pct\":%d,\"reported_mhz\":%d,\"core_limit_bits\":%d,\"thermal_history\":%d,\"thermal_active\":%s,\"power_limit_active\":%s,\"fault\":%s,\"fault_reason\":\"%s\","
+	    "\"bios_verified\":%s,\"sample_ok\":%s}\r\n", utc.wYear, utc.wMonth, utc.wDay,
+	    utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds, GetTickCount64(), owner, static_cast<unsigned char>(State.FanCtrl),
+	    CurrentMode == 4 || CurrentMode == 5 ? LastWant : -1, target, pkg, ec, rpm, watts, power.windowsLimitFlags, power.windowsLimitPercent,
+	    power.reportedMHz, power.coreLimitBits, power.thermalHistory, power.thermal < 0 ? "null" : power.thermal ? "true" : "false",
+	    power.powerLimit < 0 ? "null" : power.powerLimit ? "true" : "false",
+	    coolingFault ? "true" : "false", faultReason, biosConfirmed ? "true" : "false", fresh ? "true" : "false");
+	h = CreateFileA(fin, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	    NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h != INVALID_HANDLE_VALUE) {
+		WriteFile(h, line, static_cast<DWORD>(strlen(line)), &w, NULL);
+		CloseHandle(h);
+	}
 }
 
 //-------------------------------------------------------------------------
@@ -822,7 +910,10 @@ bool FANCONTROL::SmartControl(void) {
 //  set fan state via EC
 //-------------------------------------------------------------------------
 void FANCONTROL::RecoverCooling(const char* reason) {
-	if (!coolingFault) Trace(reason);
+	if (!coolingFault) {
+		if (strcmp(faultReason, "none") == 0) faultReason = reason;
+		Trace(faultReason);
+	}
 	coolingFault = true;
 	ModeToDialog(1);
 	CurrentMode = 1;
@@ -830,6 +921,7 @@ void FANCONTROL::RecoverCooling(const char* reason) {
 	FCSHARED* shared = SharedState();
 	if (shared) {
 		shared->mode = 1;
+		LastCmdSeq = shared->cmdSeq;
 		shared->packageC = -1;
 		shared->packageAt = 0;
 		shared->fanCtrl = static_cast<unsigned char>(State.FanCtrl);

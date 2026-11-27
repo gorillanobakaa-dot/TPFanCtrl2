@@ -98,6 +98,28 @@ int APIENTRY WinMain(HINSTANCE instance, HINSTANCE, LPSTR aArgs, int) {
     hInstRes = instance;
     hInstApp = instance;
 
+    if (aArgs && strncmp(aArgs, "--target ", 9) == 0) {
+        char profile[12] = {}, extra = 0;
+        int target = 0;
+        if (sscanf_s(aArgs + 9, "%11s %d %c", profile, (unsigned)sizeof(profile),
+                     &target, &extra, 1u) != 2 || target < 40 || target > 70) return 2;
+        int index = strcmp(profile, "compile") == 0 ? 1 : strcmp(profile, "gorilla") == 0 ? 0 : -1;
+        if (index < 0 || !SharedState_Attach()) return 3;
+        auto* state = SharedState();
+        const LONG priorSeq = state->stateSeq;
+        InterlockedExchange(&state->requestedTarget[index], target);
+        const ULONGLONG deadline = GetTickCount64() + 15000;
+        while (GetTickCount64() < deadline && state->requestedTarget[index] == target) {
+            if (state->stateSeq != priorSeq && state->observedTarget[index] == target) {
+                SharedState_Close();
+                return 0;
+            }
+            Sleep(100);
+        }
+        SharedState_Close();
+        return 4;
+    }
+
     bool install = false;
     bool uninstall = false;
     bool quiet = false;
